@@ -1,11 +1,7 @@
 {
-  "name": "transit_api",
+  "name": "employee_api",
   "version": "1.0.0",
-  "description": "Transit api",
-  "repository": {
-    "type": "git",
-    "url": "transitapi"
-  },
+  "description": "",
   "license": "ISC",
   "author": "",
   "type": "commonjs",
@@ -15,9 +11,11 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "cors": "^2.8.6",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "path": "^0.12.7"
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.20.0"
   }
 }
