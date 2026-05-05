@@ -6,7 +6,8 @@ import 'auth_service.dart';
 /// Schedule/Route Service
 class ScheduleService {
   // TODO: Implement API connector - configure base URL from env/config
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  // Transit API runs on port 5001
+  static const String _apiBaseUrl = 'http://192.168.2.66:5001';
   final _authService = AuthService();
 
   /// Get daily schedule for a specific date
@@ -43,8 +44,9 @@ class ScheduleService {
     try {
       final headers = await _authService.getAuthHeaders();
 
+      // Transit API exposes route details at /routes/:routeId
       final response = await http.get(
-        Uri.parse('$_apiBaseUrl/schedule/route/$routeId'),
+        Uri.parse('$_apiBaseUrl/routes/$routeId'),
         headers: headers,
       );
 
@@ -66,8 +68,9 @@ class ScheduleService {
     try {
       final headers = await _authService.getAuthHeaders();
 
+      // Transit API updates status at /routes/:routeId/status
       final response = await http.patch(
-        Uri.parse('$_apiBaseUrl/schedule/route/$routeId/status'),
+        Uri.parse('$_apiBaseUrl/routes/$routeId/status'),
         headers: headers,
         body: jsonEncode({'status': status}),
       );

@@ -2,51 +2,45 @@ version: '3.9'
 
 services:
   auth_api:
-    image: ghcr.io/Sven491/XTransit/auth_api:latest
+    image: ghcr.io/sven491/xtransit/auth_api:latest
     container_name: auth_api
     ports:
       - "5000:5000"
     environment:
       PORT: 5000
       JWT_SECRET: ${JWT_SECRET}
-      DB_HOST: ${POSTGRES_HOST}
-      DB_PORT: ${POSTGRES_PORT}
-      DB_NAME: ${POSTGRES_DB}
-      DB_USER: ${POSTGRES_USER_AUTH}
-      DB_PASSWORD: ${POSTGRES_PASSWORD_AUTH}
-    depends_on:
-      db:
-        condition: service_healthy
+      PG_HOST: ${POSTGRES_HOST}
+      PG_PORT: ${POSTGRES_PORT}
+      PG_DB: ${POSTGRES_DB}
+      PG_USER: ${POSTGRES_USER_AUTH}
+      PG_PASS: ${POSTGRES_PASSWORD_AUTH}
     restart: unless-stopped
 
   employee_api:
-    image: ghcr.io/Sven491/XTransit/employee_api:latest
+    image: ghcr.io/sven491/xtransit/employee_api:latest
     container_name: employee_api
     ports:
       - "4000:4000"
     environment:
       PORT: 4000
-      DB_HOST: ${POSTGRES_HOST}
-      DB_PORT: ${POSTGRES_PORT}
-      DB_NAME: ${POSTGRES_DB}
-      DB_USER: ${POSTGRES_USER_EMPLOYEE}
-      DB_PASSWORD: ${POSTGRES_PASSWORD_EMPLOYEE}
-    depends_on:
-      db:
-        condition: service_healthy
+      PG_HOST: ${POSTGRES_HOST}
+      PG_PORT: ${POSTGRES_PORT}
+      PG_DB: ${POSTGRES_DB}
+      PG_USER: ${POSTGRES_USER_EMPLOYEE}
+      PG_PASS: ${POSTGRES_PASSWORD_EMPLOYEE}
     restart: unless-stopped
 
   transit_api:
-    image: ghcr.io/Sven491/XTransit/transit_api:latest
+    image: ghcr.io/sven491/xtransit/transit_api:latest
     container_name: transit_api
     ports:
       - "5001:5001"
     environment:
       PORT: 5001
       JWT_SECRET: ${JWT_SECRET}
-      DB_HOST: ${POSTGRES_HOST}
-      DB_PORT: ${POSTGRES_PORT}
-      DB_NAME: ${POSTGRES_DB}
-      DB_USER: ${POSTGRES_USER_TRANSIT}
-      DB_PASSWORD: ${POSTGRES_PASSWORD_TRANSIT}
+      PG_HOST: ${POSTGRES_HOST}
+      PG_PORT: ${POSTGRES_PORT}
+      PG_DB: ${POSTGRES_DB}
+      PG_USER: ${POSTGRES_USER_TRANSIT}
+      PG_PASS: ${POSTGRES_PASSWORD_TRANSIT}
     restart: unless-stopped

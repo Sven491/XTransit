@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
@@ -6,7 +7,7 @@ import '../models/user.dart';
 /// Authentication Service
 class AuthService {
   // TODO: Implement API connector - configure base URL from env/config
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = 'http://192.168.2.66:5000';
   static const String _tokenKey = 'auth_token';
 
   late SharedPreferences _prefs;
@@ -17,7 +18,7 @@ class AuthService {
 
   /// Login with userCode and password
   Future<AuthResponse> login({
-    required String userCode,
+    required int userCode,
     required String password,
   }) async {
     await _initPrefs();
@@ -33,13 +34,19 @@ class AuthService {
       );
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final authResponse = AuthResponse.fromJson(data);
+        final body = response.body;
+        try {
+          final data = jsonDecode(body) as Map<String, dynamic>;
+          final authResponse = AuthResponse.fromJson(data);
 
-        // Store token
-        await _prefs.setString(_tokenKey, authResponse.token);
+          // Store token
+          await _prefs.setString(_tokenKey, authResponse.token);
 
-        return authResponse;
+          return authResponse;
+        } catch (e) {
+          // Surface the response body to help debug backend field names / formats
+          throw Exception('Login parse error: $e -- response body: $body');
+        }
       } else if (response.statusCode == 401) {
         throw Exception('Invalid credentials');
       } else {

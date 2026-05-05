@@ -34,8 +34,14 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
+      final input = _userCodeController.text.trim();
+      final parsedUserCode = int.tryParse(input);
+      if (parsedUserCode == null) {
+        throw Exception('User code must be a number');
+      }
+
       final response = await _authService.login(
-        userCode: _userCodeController.text.trim(),
+        userCode: parsedUserCode,
         password: _passwordController.text,
       );
 
@@ -57,8 +63,12 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   String? _validateUserCode(String? value) {
-    if (value?.isEmpty ?? true) {
+    final v = value?.trim();
+    if (v?.isEmpty ?? true) {
       return 'User code is required';
+    }
+    if (int.tryParse(v!) == null) {
+      return 'User code must be a number';
     }
     return null;
   }
