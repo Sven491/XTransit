@@ -4,27 +4,9 @@
 version: '3.9'
 
 services:
-  db:
-    image: postgres:15-alpine
-    container_name: transit_db
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-transit_db}
-      POSTGRES_USER: ${POSTGRES_USER:-transit_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-transit_user}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
   auth_api:
     # Images van GitHub Container Registry
-    image: ghcr.io/YOUR_USERNAME/YOUR_REPO/auth_api:latest
+    image: ghcr.io/Sven491/XTransit/auth_api:latest
     # Of specifieke tag (bijv. bij versioning):
     # image: ghcr.io/YOUR_USERNAME/YOUR_REPO/auth_api:v1.0.0
     container_name: auth_api
@@ -32,12 +14,12 @@ services:
       - "5000:5000"
     environment:
       PORT: 5000
-      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
+      JWT_SECRET: ${JWT_SECRET}
       DB_HOST: db
       DB_PORT: 5432
-      DB_NAME: ${POSTGRES_DB:-transit_db}
-      DB_USER: ${POSTGRES_USER:-transit_user}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER_AUTH}
+      DB_PASSWORD: ${POSTGRES_PASSWORD_AUTH}
     depends_on:
       db:
         condition: service_healthy
@@ -54,9 +36,9 @@ services:
       PORT: 4000
       DB_HOST: db
       DB_PORT: 5432
-      DB_NAME: ${POSTGRES_DB:-transit_db}
-      DB_USER: ${POSTGRES_USER:-transit_user}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER_EMPLOYEE}
+      DB_PASSWORD: ${POSTGRES_PASSWORD_EMPLOYEE}
     depends_on:
       db:
         condition: service_healthy
@@ -72,14 +54,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
       DB_HOST: db
       DB_PORT: 5432
-      DB_NAME: ${POSTGRES_DB:-transit_db}
-      DB_USER: ${POSTGRES_USER:-transit_user}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
-    depends_on:
-      db:
-        condition: service_healthy
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER_TRANSIT}
+      DB_PASSWORD: ${POSTGRES_PASSWORD_TRANSIT}
     restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
