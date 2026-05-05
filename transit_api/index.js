@@ -38,8 +38,8 @@ app.get('/schedule/daily', authMiddleware, async (req, res) => {
         bt.seat_capacity,
         bt.license_plate
       FROM transit.routes r
-      JOIN bus_lines bl ON r.bus_line_id = bl.id
-      JOIN bus_types bt ON r.bus_type_id = bt.id
+      JOIN transit.bus_lines bl ON r.bus_line_id = bl.id
+      JOIN fleet.bus bt ON r.bus_type_id = bt.id
       WHERE r.user_id = $1 AND DATE(r.start_time) = $2
       ORDER BY r.start_time ASC
     `, [userId, date]);
