@@ -1,0 +1,86 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: transit_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-transit_db}
+      POSTGRES_USER: ${POSTGRES_USER:-transit_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-transit_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Auth API
+  auth_api:
+    build:
+      context: ./auth_api
+      dockerfile: Dockerfile
+    container_name: auth_api
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-transit_db}
+      DB_USER: ${POSTGRES_USER:-transit_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Employee API
+  employee_api:
+    build:
+      context: ./employee_api
+      dockerfile: Dockerfile
+    container_name: employee_api
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-transit_db}
+      DB_USER: ${POSTGRES_USER:-transit_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Transit API
+  transit_api:
+    build:
+      context: ./transit_api
+      dockerfile: Dockerfile
+    container_name: transit_api
+    ports:
+      - "5001:5001"
+    environment:
+      PORT: 5001
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-transit_db}
+      DB_USER: ${POSTGRES_USER:-transit_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-transit_password}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
