@@ -138,6 +138,74 @@ export default function ScheduleMaker({ token, user }) {
     return date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
   }
 
+  const getCandidateWindow = () => {
+    const line = busLines.find(l => String(l.id) === String(selectedLine))
+    if (!line || !selectedDate || !startTime) return null
+
+    const start = new Date(`${selectedDate}T${startTime}:00`)
+    const end = new Date(start)
+    end.setMinutes(end.getMinutes() + (line.estimatedDurationMinutes || 60))
+    return { start, end }
+  }
+
+  const hasOverlap = (candidate, existing) => {
+    if (!candidate || !existing?.startTime || !existing?.endTime) return false
+
+    const cStart = candidate.start.getTime()
+    const cEnd = candidate.end.getTime()
+    const eStart = new Date(existing.startTime).getTime()
+    const eEnd = new Date(existing.endTime).getTime()
+    const timeOverlap = cStart < eEnd && cEnd > eStart
+    if (!timeOverlap) return false
+
+    const cWeekdays = selectedWeekdays || []
+    const eWeekdays = Array.isArray(existing.weekdays) ? existing.weekdays : []
+
+    if (cWeekdays.length === 0 && eWeekdays.length === 0) {
+      return candidate.start.toDateString() === new Date(existing.startTime).toDateString()
+    }
+
+    if (cWeekdays.length > 0 && eWeekdays.length > 0) {
+      return cWeekdays.some(d => eWeekdays.includes(d))
+    }
+
+    if (cWeekdays.length > 0 && eWeekdays.length === 0) {
+      return cWeekdays.includes(new Date(existing.startTime).getDay())
+    }
+
+    return eWeekdays.includes(candidate.start.getDay())
+  }
+
+  const candidateWindow = getCandidateWindow()
+  const busyDriverIds = new Set(
+    schedules
+      .filter(s => s.driverId && hasOverlap(candidateWindow, s))
+      .map(s => Number(s.driverId))
+  )
+  const busyBusIds = new Set(
+    schedules
+      .filter(s => s.busId && hasOverlap(candidateWindow, s))
+      .map(s => Number(s.busId))
+  )
+
+  const scheduleHasDriverConflict = (schedule) => {
+    if (!schedule?.driverId) return false
+    return schedules.some(other =>
+      other.id !== schedule.id &&
+      Number(other.driverId) === Number(schedule.driverId) &&
+      hasOverlap({ start: new Date(schedule.startTime), end: new Date(schedule.endTime) }, other)
+    )
+  }
+
+  const scheduleHasBusConflict = (schedule) => {
+    if (!schedule?.busId) return false
+    return schedules.some(other =>
+      other.id !== schedule.id &&
+      Number(other.busId) === Number(schedule.busId) &&
+      hasOverlap({ start: new Date(schedule.startTime), end: new Date(schedule.endTime) }, other)
+    )
+  }
+
   // Group schedules by date and time (apply driver filter if selected)
   const timeSlots = generateTimeSlots()
   const filteredSchedules = selectedDriverFilter
@@ -181,8 +249,8 @@ export default function ScheduleMaker({ token, user }) {
             <select value={selectedBus} onChange={e => setSelectedBus(e.target.value)}>
               <option value="">Kies voertuig</option>
               {buses.map(bus => (
-                <option key={bus.id} value={bus.id}>
-                  {bus.name} ({bus.licensePlate})
+                <option key={bus.id} value={bus.id} disabled={busyBusIds.has(Number(bus.id))}>
+                  {bus.name} ({bus.licensePlate}) {busyBusIds.has(Number(bus.id)) ? '- in gebruik' : ''}
                 </option>
               ))}
             </select>
@@ -192,8 +260,8 @@ export default function ScheduleMaker({ token, user }) {
             <select value={driverId} onChange={e => setDriverId(e.target.value)}>
               <option value="">Bestuurder (optioneel)</option>
               {drivers.map(driver => (
-                <option key={driver.id} value={driver.id}>
-                  {driver.name}
+                <option key={driver.id} value={driver.id} disabled={busyDriverIds.has(Number(driver.id))}>
+                  {driver.name} {busyDriverIds.has(Number(driver.id)) ? '- in gebruik' : ''}
                 </option>
               ))}
             </select>
@@ -278,6 +346,16 @@ export default function ScheduleMaker({ token, user }) {
                           {schedule.driverName && (
                             <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
                               {schedule.driverName}
+                            </div>
+                          )}
+                          {scheduleHasDriverConflict(schedule) && (
+                            <div style={{ fontSize: '0.75rem', color: '#b45309', marginTop: '0.25rem', fontWeight: 600 }}>
+                              Chauffeur in gebruik
+                            </div>
+                          )}
+                          {scheduleHasBusConflict(schedule) && (
+                            <div style={{ fontSize: '0.75rem', color: '#b45309', marginTop: '0.25rem', fontWeight: 600 }}>
+                              Voertuig in gebruik
                             </div>
                           )}
                           {schedule.weekdays && schedule.weekdays.length > 0 && (

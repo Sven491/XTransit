@@ -87,6 +87,117 @@ function calculateDepartureTimes(startTime, busLineId, mock) {
   });
 }
 
+function parseWeekdaysValue(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map(v => Number(v)).filter(v => Number.isFinite(v));
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map(v => Number(v)).filter(v => Number.isFinite(v));
+      }
+    } catch (_) {
+      // Fall through to CSV/PG-array parsing.
+    }
+
+    // Handles values like "1,2,3" or "{1,2,3}".
+    const normalized = trimmed.replace('{', '').replace('}', '');
+    return normalized
+      .split(',')
+      .map(v => Number(v.trim()))
+      .filter(v => Number.isFinite(v));
+  }
+
+  return [];
+}
+
+/**
+ * Check if two schedules have date/weekday overlap
+ */
+function doSchedulesDateOverlap(schedule1Start, schedule1End, schedule1Weekdays, schedule2Start, schedule2End, schedule2Weekdays) {
+  const s1Start = new Date(schedule1Start);
+  const s1End = new Date(schedule1End);
+  const s2Start = new Date(schedule2Start);
+  const s2End = new Date(schedule2End);
+  
+  // Check time overlap
+  if (s1End <= s2Start || s2End <= s1Start) {
+    return false; // No time overlap
+  }
+  
+  // If both have no weekdays (one-time), check if same day
+  if ((!schedule1Weekdays || schedule1Weekdays.length === 0) && 
+      (!schedule2Weekdays || schedule2Weekdays.length === 0)) {
+    return s1Start.toDateString() === s2Start.toDateString();
+  }
+  
+  // If one has weekdays and other doesn't, check if one-time falls on weekday
+  if (schedule1Weekdays && schedule1Weekdays.length > 0 && 
+      (!schedule2Weekdays || schedule2Weekdays.length === 0)) {
+    const s2Day = s2Start.getDay(); // 0=Sun, 1=Mon, etc.
+    const s2Adjusted = s2Day === 0 ? 0 : s2Day; // Normalize to 0-6
+    return schedule1Weekdays.includes(s2Adjusted);
+  }
+  
+  if ((!schedule1Weekdays || schedule1Weekdays.length === 0) && 
+      schedule2Weekdays && schedule2Weekdays.length > 0) {
+    const s1Day = s1Start.getDay();
+    const s1Adjusted = s1Day === 0 ? 0 : s1Day;
+    return schedule2Weekdays.includes(s1Adjusted);
+  }
+  
+  // Both have weekdays: check if any day overlaps
+  if (schedule1Weekdays && schedule2Weekdays) {
+    return schedule1Weekdays.some(d => schedule2Weekdays.includes(d));
+  }
+  
+  return false;
+}
+
+/**
+ * Check if a driver has conflicts with existing schedules
+ */
+function checkDriverConflict(driverId, startTime, endTime, weekdays, allSchedules, excludeScheduleId = null) {
+  if (!driverId) return false; // No conflict if no driver specified
+  
+  return allSchedules.some(s => {
+    if (excludeScheduleId && s.id === excludeScheduleId) return false;
+    const sDriverId = s.driverId ?? s.driver_id;
+    if (Number(sDriverId) !== Number(driverId)) return false;
+    
+    const sWeekdays = parseWeekdaysValue(s.weekdays);
+    const wkdays = weekdays || [];
+    const sStart = s.startTime ?? s.start_time;
+    const sEnd = s.endTime ?? s.end_time;
+    
+    return doSchedulesDateOverlap(startTime, endTime, wkdays, sStart, sEnd, sWeekdays);
+  });
+}
+
+/**
+ * Check if a bus has conflicts with existing schedules
+ */
+function checkBusConflict(busId, startTime, endTime, weekdays, allSchedules, excludeScheduleId = null) {
+  if (!busId) return false;
+  
+  return allSchedules.some(s => {
+    if (excludeScheduleId && s.id === excludeScheduleId) return false;
+    const sBusId = s.busId ?? s.bus_id;
+    if (Number(sBusId) !== Number(busId)) return false;
+    
+    const sWeekdays = parseWeekdaysValue(s.weekdays);
+    const wkdays = weekdays || [];
+    const sStart = s.startTime ?? s.start_time;
+    const sEnd = s.endTime ?? s.end_time;
+    
+    return doSchedulesDateOverlap(startTime, endTime, wkdays, sStart, sEnd, sWeekdays);
+  });
+}
+
 // ============================================
 // ROUTES - Get daily schedule
 // ============================================
@@ -478,7 +589,13 @@ app.patch('/admin/bus-lines/:busLineId', authMiddleware, adminMiddleware, async 
 app.get('/admin/fleet/buses', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (DEV_MOCK) {
-      return res.json({ buses: _mock.fleetBuses.slice().sort((a, b) => a.id - b.id) });
+      const buses = _mock.fleetBuses.slice().sort((a, b) => a.id - b.id);
+      return res.json({ 
+        buses: buses.map(b => ({
+          ...b,
+          available: !checkBusConflict(b.id, new Date().toISOString(), new Date(Date.now() + 24*60*60*1000).toISOString(), [], _mock.schedules || [])
+        }))
+      });
     }
 
     const result = await db.query(`
@@ -487,13 +604,29 @@ app.get('/admin/fleet/buses', authMiddleware, adminMiddleware, async (req, res) 
       ORDER BY id ASC
     `);
 
+    // Get all schedules to check for conflicts
+    const schedulesResult = await db.query(`SELECT * FROM transit.schedules WHERE status IN ('planned', 'active')`);
+    const schedules = schedulesResult.rows.map(row => ({
+      ...row,
+      weekdays: parseWeekdaysValue(row.weekdays),
+    }));
+
     res.json({
-      buses: result.rows.map(row => ({
-        id: row.id,
-        name: row.name,
-        seatCapacity: row.seat_capacity,
-        licensePlate: row.license_plate,
-      })),
+      buses: result.rows.map(row => {
+        const busId = row.id;
+        const now = new Date();
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const isAvailable = !checkBusConflict(busId, now.toISOString(), tomorrow.toISOString(), [], schedules);
+        
+        return {
+          id: row.id,
+          name: row.name,
+          seatCapacity: row.seat_capacity,
+          licensePlate: row.license_plate,
+          available: isAvailable,
+        };
+      }),
     });
   } catch (err) {
     console.error(err);
@@ -1047,7 +1180,13 @@ app.patch('/routes/:routeId/status', authMiddleware, async (req, res) => {
 app.get('/admin/drivers', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (DEV_MOCK) {
-      return res.json({ drivers: _mock.drivers.slice().filter(d => d.status === 'active') });
+      const drivers = _mock.drivers.slice().filter(d => d.status === 'active');
+      return res.json({ 
+        drivers: drivers.map(d => ({
+          ...d,
+          available: !checkDriverConflict(d.id, new Date().toISOString(), new Date(Date.now() + 24*60*60*1000).toISOString(), [], _mock.schedules || [])
+        }))
+      });
     }
 
     const result = await db.query(`
@@ -1057,16 +1196,32 @@ app.get('/admin/drivers', authMiddleware, adminMiddleware, async (req, res) => {
       ORDER BY firstname, lastname ASC
     `);
 
+    // Get all schedules to check for conflicts
+    const schedulesResult = await db.query(`SELECT * FROM transit.schedules WHERE status IN ('planned', 'active')`);
+    const schedules = schedulesResult.rows.map(row => ({
+      ...row,
+      weekdays: parseWeekdaysValue(row.weekdays),
+    }));
+
     res.json({
-      drivers: result.rows.map(row => ({
-        id: row.id,
-        name: (String(row.firstname || '') + ' ' + String(row.lastname || '')).trim(),
-        email: row.email,
-        phone: row.phone,
-        job: row.job,
-        joined: row.joined,
-        status: row.status,
-      })),
+      drivers: result.rows.map(row => {
+        const driverId = row.id;
+        const now = new Date();
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const isAvailable = !checkDriverConflict(driverId, now.toISOString(), tomorrow.toISOString(), [], schedules);
+        
+        return {
+          id: row.id,
+          name: (String(row.firstname || '') + ' ' + String(row.lastname || '')).trim(),
+          email: row.email,
+          phone: row.phone,
+          job: row.job,
+          joined: row.joined,
+          status: row.status,
+          available: isAvailable,
+        };
+      }),
     });
   } catch (err) {
     console.error(err);
@@ -1087,7 +1242,12 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
       return res.json({ schedules });
     }
 
-    const result = await db.query(`
+    const hasWeekdaysColumn = await db.query(`
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_schema='transit' AND table_name='schedules' AND column_name='weekdays'
+    `);
+
+    const baseSelect = `
       SELECT 
         s.id,
         s.bus_line_id,
@@ -1095,23 +1255,33 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
         s.driver_id,
         s.start_time,
         s.end_time,
-        s.weekdays,
         s.status,
         s.created_at,
         bl.line_number,
         bl.estimated_duration_minutes,
         b.name as bus_name,
         b.license_plate,
-        TRIM(COALESCE(e.firstname, '') || ' ' || COALESCE(e.lastname, '')) as driver_name
-      FROM transit.schedules s
-      LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
-      LEFT JOIN fleet.bus b ON s.bus_id = b.id
-      LEFT JOIN workers.employees e ON s.driver_id = e.id
-      ORDER BY s.start_time DESC
-    `);
+        TRIM(COALESCE(e.firstname, '') || ' ' || COALESCE(e.lastname, '')) as driver_name`;
+
+    const result = hasWeekdaysColumn.rows.length > 0
+      ? await db.query(`${baseSelect}, s.weekdays as weekdays
+          FROM transit.schedules s
+          LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+          LEFT JOIN fleet.bus b ON s.bus_id = b.id
+          LEFT JOIN workers.employees e ON s.driver_id = e.id
+          ORDER BY s.start_time DESC`)
+      : await db.query(`${baseSelect}, NULL as weekdays
+          FROM transit.schedules s
+          LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+          LEFT JOIN fleet.bus b ON s.bus_id = b.id
+          LEFT JOIN workers.employees e ON s.driver_id = e.id
+          ORDER BY s.start_time DESC`);
 
     const schedules = result.rows.map(row => {
       const departureTimes = calculateDepartureTimes(row.start_time, row.bus_line_id, _mock);
+      
+      const weekdays = parseWeekdaysValue(row.weekdays);
+      
       return {
         id: row.id,
         busLineId: row.bus_line_id,
@@ -1120,7 +1290,7 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
         driverName: row.driver_name || null,
         startTime: row.start_time,
         endTime: row.end_time,
-        weekdays: row.weekdays ? JSON.parse(row.weekdays) : [],
+        weekdays: weekdays,
         departureTimes,
         status: row.status,
         lineNumber: row.line_number,
@@ -1132,7 +1302,7 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
 
     res.json({ schedules });
   } catch (err) {
-    console.error(err);
+    console.error('GET /admin/schedules error:', err);
     res.status(500).json({ error: 'internal_error', details: err.message });
   }
 });
@@ -1193,18 +1363,39 @@ app.post('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =
     const endDate = new Date(startDate);
     endDate.setMinutes(endDate.getMinutes() + (busLine.rows[0].estimated_duration_minutes || 60));
 
-    const result = await db.query(`
-      WITH next_id AS (
-        SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules
-      )
-      INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status, weekdays)
-      SELECT next_id.id, $1, $2, $3, $4, $5, 'planned', $6
-      FROM next_id
-      RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, weekdays, created_at
-    `, [busLineId, busId, driverId || null, startTime, endDate.toISOString(), JSON.stringify(scheduleWeekdays)]);
+    // Check if weekdays column exists before including it in INSERT
+    const hasWeekdaysColumn = await db.query(`
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_schema='transit' AND table_name='schedules' AND column_name='weekdays'
+    `);
+    
+    let result;
+    if (hasWeekdaysColumn.rows.length > 0) {
+      result = await db.query(`
+        WITH next_id AS (
+          SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules
+        )
+        INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status, weekdays)
+        SELECT next_id.id, $1, $2, $3, $4, $5, 'planned', $6
+        FROM next_id
+        RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, weekdays, created_at
+      `, [busLineId, busId, driverId || null, startTime, endDate.toISOString(), JSON.stringify(scheduleWeekdays)]);
+    } else {
+      result = await db.query(`
+        WITH next_id AS (
+          SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules
+        )
+        INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status)
+        SELECT next_id.id, $1, $2, $3, $4, $5, 'planned'
+        FROM next_id
+        RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, created_at
+      `, [busLineId, busId, driverId || null, startTime, endDate.toISOString()]);
+    }
 
     const schedule = result.rows[0];
     const departureTimes = calculateDepartureTimes(startTime, busLineId, _mock);
+
+    const weekdaysResult = parseWeekdaysValue(schedule.weekdays);
 
     res.status(201).json({
       schedule: {
@@ -1214,7 +1405,7 @@ app.post('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =
         driverId: schedule.driver_id,
         startTime: schedule.start_time,
         endTime: schedule.end_time,
-        weekdays: schedule.weekdays ? JSON.parse(schedule.weekdays) : [],
+        weekdays: weekdaysResult,
         departureTimes,
         status: schedule.status,
         createdAt: schedule.created_at,
