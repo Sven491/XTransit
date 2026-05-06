@@ -35,6 +35,57 @@ if (DEV_MOCK) {
     { id: 4, name: 'Anja Voorn', email: 'anja@transit.local', phone: '06-44444444', status: 'inactive' },
   ];
   _mock.nextDriverId = 5;
+
+  // Initialize test bus lines
+  _mock.busLines = [
+    { id: 1, lineNumber: 1, startStop: 'Central Station', endStop: 'Airport', estimatedDurationMinutes: 45, description: 'Main route' },
+    { id: 2, lineNumber: 2, startStop: 'Central Station', endStop: 'Harbor', estimatedDurationMinutes: 30, description: 'Harbor route' },
+  ];
+  _mock.nextBusLineId = 3;
+
+  // Initialize test stops
+  _mock.stops = [
+    { id: 1, name: 'Central Station', latitude: 52.0116, longitude: 4.7055, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 2, name: 'City Center', latitude: 52.0125, longitude: 4.7100, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 3, name: 'Airport', latitude: 52.0300, longitude: 4.7500, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  ];
+  _mock.nextStopId = 4;
+
+  // Initialize test route stops
+  _mock.routeStops = [
+    { id: 1, busLineId: 1, stopId: 1, stopOrder: 1, estimatedArrivalMinutes: 0, name: 'Central Station', latitude: 52.0116, longitude: 4.7055 },
+    { id: 2, busLineId: 1, stopId: 2, stopOrder: 2, estimatedArrivalMinutes: 15, name: 'City Center', latitude: 52.0125, longitude: 4.7100 },
+    { id: 3, busLineId: 1, stopId: 3, stopOrder: 3, estimatedArrivalMinutes: 45, name: 'Airport', latitude: 52.0300, longitude: 4.7500 },
+  ];
+  _mock.nextRouteStopId = 4;
+
+  // Initialize test fleet buses
+  _mock.fleetBuses = [
+    { id: 1, name: 'Bus 101', seatCapacity: 45, licensePlate: 'AB-01-CD', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 2, name: 'Bus 102', seatCapacity: 50, licensePlate: 'AB-02-CD', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  ];
+  _mock.nextFleetBusId = 3;
+
+  // Initialize test schedule
+  const now = new Date();
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  tomorrow.setHours(10, 0, 0, 0);
+  const endTime = new Date(tomorrow.getTime() + 45 * 60 * 1000);
+
+  _mock.schedules = [
+    {
+      id: 1,
+      busLineId: 1,
+      busId: 1,
+      driverId: null,
+      startTime: tomorrow.toISOString(),
+      endTime: endTime.toISOString(),
+      weekdays: [],
+      status: 'planned',
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  _mock.nextScheduleId = 2;
 }
 
 const adminUserCodes = new Set(
@@ -1538,7 +1589,24 @@ app.get('/schedules/:scheduleId', async (req, res) => {
       if (!schedule) {
         return res.status(404).json({ error: 'schedule_not_found' });
       }
-      return res.json({ schedule });
+      
+      // Enrich with bus line and fleet bus info
+      const busLine = _mock.busLines.find(bl => bl.id === schedule.busLineId);
+      const bus = _mock.fleetBuses.find(b => b.id === schedule.busId);
+      
+      return res.json({
+        schedule: {
+          id: schedule.id,
+          busLineId: schedule.busLineId,
+          busId: schedule.busId,
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          weekdays: schedule.weekdays || [],
+          status: schedule.status,
+          lineNumber: busLine?.lineNumber || 0,
+          busName: bus?.name || 'Unknown Bus',
+        },
+      });
     }
 
     const result = await db.query(`
@@ -1549,6 +1617,7 @@ app.get('/schedules/:scheduleId', async (req, res) => {
         s.start_time,
         s.end_time,
         s.status,
+        s.weekdays,
         bl.line_number,
         bl.start_stop,
         bl.end_stop,
@@ -1565,6 +1634,8 @@ app.get('/schedules/:scheduleId', async (req, res) => {
     }
 
     const row = result.rows[0];
+    const weekdays = parseWeekdaysValue(row.weekdays);
+    
     res.json({
       schedule: {
         id: row.id,
@@ -1573,6 +1644,7 @@ app.get('/schedules/:scheduleId', async (req, res) => {
         startTime: row.start_time,
         endTime: row.end_time,
         status: row.status,
+        weekdays: weekdays,
         lineNumber: row.line_number,
         startStop: row.start_stop,
         endStop: row.end_stop,
