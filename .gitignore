@@ -1,0 +1,17 @@
+.env
+/*.env
+transit_api/.env
+
+# Local build / node_modules
+admin_ui/node_modules/
+admin_ui/dist/
+
+# Sensitive docs to keep private
+ADMIN_DEPLOYMENT_SUMMARY.md
+CI_CD_PORTAINER_GUIDE.md
+DEPLOYMENT.md
+
+# Runtime files
+*.log
+*.sqlite3
+\

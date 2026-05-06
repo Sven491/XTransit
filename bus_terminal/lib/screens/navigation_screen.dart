@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import '../models/navigation.dart';
 import '../models/schedule.dart' as schedule;
 import '../services/navigation_service.dart';
+import '../services/schedule_service.dart';
 
 class NavigationScreen extends StatefulWidget {
   final schedule.Route route;
@@ -22,6 +23,7 @@ class NavigationScreen extends StatefulWidget {
 
 class _NavigationScreenState extends State<NavigationScreen> {
   final _navigationService = NavigationService();
+  final _scheduleService = ScheduleService();
   late MapController _mapController;
 
   NavigationRoute? _currentRoute;
@@ -29,6 +31,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _isLoading = false;
   String? _errorMessage;
   List<NavigationRoute>? _alternativeRoutes;
+  List<NavigationPoint>? _stops;
+  String? _stopsFetchError;
+  int _currentStopIndex = 0;
+  final Set<int> _completedStops = {};
 
   @override
   void initState() {
@@ -48,31 +54,79 @@ class _NavigationScreenState extends State<NavigationScreen> {
       final currentLoc = await _navigationService.getCurrentLocation();
       setState(() => _currentLocation = currentLoc);
 
-      // For demo: use the bus line start stop coordinates
-      // In production, fetch actual GPS coordinates for stops
-      final startPoint = NavigationPoint(
-        latitude: 52.5200,
-        longitude: 13.4050,
-        name: widget.route.busLine.startStop,
-      );
+      // Fetch stops for the bus line from the API (if available)
+      try {
+        _stops = await _scheduleService.getStops(widget.route.busLine.id);
+        _stopsFetchError = null;
+      } catch (e) {
+        _stops = [];
+        _stopsFetchError = e.toString().replaceAll('Exception: ', '');
+      }
 
-      final endPoint = NavigationPoint(
-        latitude: 52.5300,
-        longitude: 13.4150,
-        name: widget.route.busLine.endStop,
-      );
+      // Determine start and end points: prefer stop locations if available.
+      // If no stops are returned from the API, geocode the stop names.
+      late NavigationPoint startPoint;
+      late NavigationPoint endPoint;
 
-      // Get route
-      final navRoute = await _navigationService.getRoute(
-        start: startPoint,
-        end: endPoint,
-      );
+      if (_stops != null && _stops!.length >= 2) {
+        final optimized = await _navigationService.getOptimizedRouteThroughStops(stops: _stops!);
+        _stops = optimized.orderedStops;
+        startPoint = _stops!.first;
+        endPoint = _stops!.last;
+
+        if (mounted) {
+          setState(() {
+            _currentRoute = optimized.route;
+            _alternativeRoutes = null;
+            _isLoading = false;
+          });
+
+          _fitMapToRoute(optimized.route);
+        }
+
+        return;
+      } else if (_stops != null && _stops!.length == 1) {
+        // With exactly one linked stop, force that stop into the route as start
+        // so the marker is guaranteed to be in-view.
+        startPoint = _stops!.first;
+
+        try {
+          endPoint = await _navigationService.geocodePlace(widget.route.busLine.endStop);
+        } catch (_) {
+          endPoint = NavigationPoint(
+            latitude: startPoint.latitude + 0.01,
+            longitude: startPoint.longitude + 0.01,
+            name: widget.route.busLine.endStop,
+          );
+        }
+      } else {
+        // Try geocoding names; fall back to conservative defaults on failure
+        try {
+          startPoint = await _navigationService.geocodePlace(widget.route.busLine.startStop);
+        } catch (_) {
+          startPoint = NavigationPoint(
+            latitude: 52.5200,
+            longitude: 13.4050,
+            name: widget.route.busLine.startStop,
+          );
+        }
+
+        try {
+          endPoint = await _navigationService.geocodePlace(widget.route.busLine.endStop);
+        } catch (_) {
+          endPoint = NavigationPoint(
+            latitude: 52.5300,
+            longitude: 13.4150,
+            name: widget.route.busLine.endStop,
+          );
+        }
+      }
+
+      // Get route without waypoints
+      final navRoute = await _navigationService.getRoute(start: startPoint, end: endPoint);
 
       // Get alternative routes
-      final alternatives = await _navigationService.getMultipleRoutes(
-        start: startPoint,
-        end: endPoint,
-      );
+      final alternatives = await _navigationService.getMultipleRoutes(start: startPoint, end: endPoint);
 
       if (mounted) {
         setState(() {
@@ -95,7 +149,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _fitMapToRoute(NavigationRoute route) {
-    final allPoints = route.getAllPoints();
+    final allPoints = <LatLng>[
+      ...route.getAllPoints().map((point) => LatLng(point.latitude, point.longitude)),
+      ...(_stops ?? []).map((stop) => LatLng(stop.latitude, stop.longitude)),
+      if (_currentLocation != null) LatLng(_currentLocation!.latitude, _currentLocation!.longitude),
+    ];
     if (allPoints.isEmpty) return;
 
     double minLat = allPoints.first.latitude;
@@ -121,6 +179,126 @@ class _NavigationScreenState extends State<NavigationScreen> {
     );
   }
 
+  int _nextUncompletedStopIndex([int startIndex = 0]) {
+    if (_stops == null || _stops!.isEmpty) return 0;
+
+    for (var index = startIndex; index < _stops!.length; index++) {
+      if (!_completedStops.contains(index)) {
+        return index;
+      }
+    }
+
+    return _stops!.length - 1;
+  }
+
+  Future<void> _refreshRouteFromIndex(int index) async {
+    if (_stops == null || _stops!.isEmpty) return;
+    if (index < 0 || index >= _stops!.length) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+      _currentStopIndex = index;
+    });
+
+    try {
+      final remainingStops = _stops!.sublist(index);
+      final navRoute = remainingStops.length >= 2
+          ? await _navigationService.getRouteThroughStops(stops: remainingStops)
+          : _currentRoute;
+
+      if (mounted) {
+        setState(() {
+          if (navRoute != null) {
+            _currentRoute = navRoute;
+          }
+          _alternativeRoutes = null;
+          _isLoading = false;
+        });
+
+        if (navRoute != null) {
+          _fitMapToRoute(navRoute);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceAll('Exception: ', '');
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _focusStop(int index) async {
+    if (_stops == null || _stops!.isEmpty) return;
+    if (index < 0 || index >= _stops!.length) return;
+    await _refreshRouteFromIndex(index);
+  }
+
+  Future<void> _markStopCompleted(int index) async {
+    if (_stops == null || _stops!.isEmpty) return;
+    if (index < 0 || index >= _stops!.length) return;
+
+    setState(() {
+      _completedStops.add(index);
+    });
+
+    final nextIndex = _nextUncompletedStopIndex(index + 1);
+    await _refreshRouteFromIndex(nextIndex);
+  }
+
+  double get _routeProgress {
+    if (_stops == null || _stops!.isEmpty) return 0;
+    if (_stops!.length == 1) return 1;
+    return _currentStopIndex / (_stops!.length - 1);
+  }
+
+  Color get _routeColor => Color.lerp(Colors.blue, Colors.orange, _routeProgress) ?? Colors.blue;
+
+  Color _stopColor(int index) {
+    if (_completedStops.contains(index) || index < _currentStopIndex) return Colors.green;
+    if (index == _currentStopIndex) return Colors.orange;
+    return Colors.blueGrey;
+  }
+
+  IconData _stopIcon(int index) {
+    if (_completedStops.contains(index) || index < _currentStopIndex) return Icons.check_circle;
+    if (index == _currentStopIndex) return Icons.radio_button_checked;
+    return Icons.location_on;
+  }
+
+  bool _isStopCompleted(int index) => _completedStops.contains(index) || index < _currentStopIndex;
+
+  bool _hasStopNearPoint(NavigationPoint point, {double threshold = 0.00005}) {
+    if (_stops == null || _stops!.isEmpty) return false;
+
+    for (final stop in _stops!) {
+      final latDiff = (stop.latitude - point.latitude).abs();
+      final lonDiff = (stop.longitude - point.longitude).abs();
+      if (latDiff <= threshold && lonDiff <= threshold) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  NavigationPoint? get _currentStopPoint {
+    if (_stops == null || _stops!.isEmpty) return null;
+    return _stops![_currentStopIndex.clamp(0, _stops!.length - 1)];
+  }
+
+  NavigationPoint? get _nextStopPoint {
+    if (_stops == null || _stops!.isEmpty) return null;
+    final nextIndex = _nextUncompletedStopIndex(_currentStopIndex + 1);
+    return _stops![nextIndex.clamp(0, _stops!.length - 1)];
+  }
+
+  double get _completionRatio {
+    if (_stops == null || _stops!.isEmpty) return 0;
+    return _completedStops.length / _stops!.length;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -128,309 +306,529 @@ class _NavigationScreenState extends State<NavigationScreen> {
         title: Text('Route ${widget.route.busLine.lineNumber} Navigation'),
         elevation: 0,
       ),
-      body: Stack(
+      body: Row(
         children: [
-          // Map
-          if (_currentRoute != null)
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: LatLng(
-                  _currentRoute!.start.latitude,
-                  _currentRoute!.start.longitude,
-                ),
-                initialZoom: 13.0,
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate:
-                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.bus_terminal',
-                ),
-                MarkerLayer(
-                  markers: [
-                    // Start marker
-                    Marker(
-                      point: LatLng(
+          // Map area (left pane)
+          Expanded(
+            flex: 6,
+            child: _currentRoute != null
+                ? FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter: LatLng(
                         _currentRoute!.start.latitude,
                         _currentRoute!.start.longitude,
                       ),
-                      width: 40,
-                      height: 40,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.green,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white,
-                            width: 2,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.location_on,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
+                      initialZoom: 13.0,
                     ),
-                    // End marker
-                    Marker(
-                      point: LatLng(
-                        _currentRoute!.end.latitude,
-                        _currentRoute!.end.longitude,
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.example.bus_terminal',
                       ),
-                      width: 40,
-                      height: 40,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.red,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white,
-                            width: 2,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.location_on,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                    // Current location marker
-                    if (_currentLocation != null)
-                      Marker(
-                        point: LatLng(
-                          _currentLocation!.latitude,
-                          _currentLocation!.longitude,
-                        ),
-                        width: 30,
-                        height: 30,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.blue,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white,
-                              width: 2,
+                      MarkerLayer(
+                        markers: [
+                          ...(_stops ?? []).asMap().entries.map((entry) {
+                            final index = entry.key;
+                            final stop = entry.value;
+                            final color = _stopColor(index);
+
+                            return Marker(
+                              point: LatLng(stop.latitude, stop.longitude),
+                              width: 46,
+                              height: 46,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: color,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 3,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.22),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    Icon(
+                                      _stopIcon(index),
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
+                                    Positioned(
+                                      bottom: 4,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.35),
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                        child: Text(
+                                          '${index + 1}',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                          // Start marker
+                          if (!_hasStopNearPoint(_currentRoute!.start))
+                            Marker(
+                              point: LatLng(
+                                _currentRoute!.start.latitude,
+                                _currentRoute!.start.longitude,
+                              ),
+                              width: 40,
+                              height: 40,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.green,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.location_on,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
                             ),
-                          ),
-                          child: const Icon(
-                            Icons.directions_bus,
-                            color: Colors.white,
-                            size: 16,
-                          ),
-                        ),
+                          // End marker
+                          if (!_hasStopNearPoint(_currentRoute!.end))
+                            Marker(
+                              point: LatLng(
+                                _currentRoute!.end.latitude,
+                                _currentRoute!.end.longitude,
+                              ),
+                              width: 40,
+                              height: 40,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.red,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.location_on,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          // Current location marker
+                          if (_currentLocation != null)
+                            Marker(
+                              point: LatLng(
+                                _currentLocation!.latitude,
+                                _currentLocation!.longitude,
+                              ),
+                              width: 30,
+                              height: 30,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.blue,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.directions_bus,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                  ],
-                ),
-                PolylineLayer(
-                  polylines: [
-                    // Main route
-                    Polyline(
-                      points: _currentRoute!
-                          .getAllPoints()
-                          .map((p) => LatLng(p.latitude, p.longitude))
-                          .toList(),
-                      color: Colors.blue,
-                      strokeWidth: 4,
-                    ),
-                    // Alternative routes (lighter)
-                    if (_alternativeRoutes != null)
-                      ...List.generate(
-                        _alternativeRoutes!.length,
-                        (i) => Polyline(
-                          points: _alternativeRoutes![i]
-                              .getAllPoints()
-                              .map((p) => LatLng(p.latitude, p.longitude))
-                              .toList(),
-                          color: Colors.grey.withOpacity(0.5),
-                          strokeWidth: 2,
-                        ),
+                      PolylineLayer(
+                        polylines: [
+                          // Main route
+                          Polyline(
+                            points: _currentRoute!
+                                .getAllPoints()
+                                .map((p) => LatLng(p.latitude, p.longitude))
+                                .toList(),
+                            color: _routeColor,
+                            strokeWidth: 5,
+                          ),
+                          // Alternative routes (lighter)
+                          if (_alternativeRoutes != null)
+                            ...List.generate(
+                              _alternativeRoutes!.length,
+                              (i) => Polyline(
+                                points: _alternativeRoutes![i]
+                                    .getAllPoints()
+                                    .map((p) => LatLng(p.latitude, p.longitude))
+                                    .toList(),
+                                color: Colors.grey.withOpacity(0.5),
+                                strokeWidth: 2,
+                              ),
+                            ),
+                        ],
                       ),
-                  ],
+                    ],
+                  )
+                : (_isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : Center(
+                        child: _errorMessage != null
+                            ? Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.error_outline,
+                                    size: 64,
+                                    color: Colors.red[300],
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'Failed to load route',
+                                    style:
+                                        Theme.of(context).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    _errorMessage!,
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              )
+                            : const Text('No route'))),
+          ),
+
+          // Vertical divider
+          Container(width: 1, color: Colors.grey[200]),
+
+          // Stops / Info panel (right pane)
+          Expanded(
+            flex: 4,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
                 ),
-              ],
-            )
-          else if (_isLoading)
-            const Center(child: CircularProgressIndicator())
-          else if (_errorMessage != null)
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.error_outline,
-                    size: 64,
-                    color: Colors.red[300],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Failed to load route',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _errorMessage!,
-                    style: Theme.of(context).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 10,
+                    offset: const Offset(-2, 0),
                   ),
                 ],
               ),
-            ),
-
-          // Route info panel
-          if (_currentRoute != null)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 10,
-                      offset: const Offset(0, -2),
-                    ),
-                  ],
-                ),
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Route title
-                        Text(
-                          'Route Summary',
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(fontWeight: FontWeight.bold),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF0F172A), Color(0xFF1D4ED8)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
-                        const SizedBox(height: 16),
-
-                        // Route info row
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            Column(
-                              children: [
-                                Icon(
-                                  Icons.straighten,
-                                  size: 32,
-                                  color: Colors.blue,
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  '${_currentRoute!.getTotalDistanceKm()} km',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                            Column(
-                              children: [
-                                Icon(
-                                  Icons.timer,
-                                  size: 32,
-                                  color: Colors.orange,
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  _currentRoute!.getTotalDurationHM(),
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                            Column(
-                              children: [
-                                Icon(
-                                  Icons.speed,
-                                  size: 32,
-                                  color: Colors.green,
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  '${(_currentRoute!.totalDistance / _currentRoute!.totalDuration * 3.6).toStringAsFixed(0)} km/h',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-
-                        // Route details
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[100],
-                            borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.12),
+                            blurRadius: 18,
+                            offset: const Offset(0, 8),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
                             children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.location_on,
-                                    color: Colors.green,
-                                    size: 20,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'From: ${_currentRoute!.start.name}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
-                                    ),
-                                  ),
-                                ],
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.18),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.route,
+                                  color: Colors.white,
+                                ),
                               ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.location_on,
-                                    color: Colors.red,
-                                    size: 20,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'To: ${_currentRoute!.end.name}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Route ${widget.route.busLine.lineNumber}',
+                                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                          ),
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${widget.route.busLine.startStop} → ${widget.route.busLine.endStop}',
+                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                            color: Colors.white.withOpacity(0.85),
+                                          ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 16),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(999),
+                            child: LinearProgressIndicator(
+                              minHeight: 10,
+                              value: _completionRatio,
+                              backgroundColor: Colors.white.withOpacity(0.12),
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.amberAccent),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                '${(_completionRatio * 100).round()}% afgerond',
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                              Text(
+                                '${_completedStops.length}/${_stops?.length ?? 0} stops',
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Colors.white.withOpacity(0.85),
+                                    ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildSummaryPill(
+                                  'Huidig',
+                                  _currentStopPoint?.name ?? 'Geen stop',
+                                  Icons.radio_button_checked,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: _buildSummaryPill(
+                                  'Volgend',
+                                  _nextStopPoint?.name ?? 'Einde route',
+                                  Icons.skip_next,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: const Color(0xFF0F172A),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              onPressed: _stops == null || _stops!.isEmpty || _isStopCompleted(_currentStopIndex)
+                                  ? null
+                                  : () => _markStopCompleted(_currentStopIndex),
+                              icon: const Icon(Icons.check_circle_outline),
+                              label: const Text('Markeer huidige stop afgerond'),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          _legendDot(Colors.green, 'Afgerond'),
+                          const SizedBox(width: 12),
+                          _legendDot(Colors.orange, 'Actief'),
+                          const SizedBox(width: 12),
+                          _legendDot(Colors.blueGrey, 'Te doen'),
+                        ],
+                      ),
+                    ),
+                    if (_stopsFetchError != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.red.withOpacity(0.25)),
+                        ),
+                        child: Text(
+                          'Stops konden niet geladen worden voor buslijn ${widget.route.busLine.id}: $_stopsFetchError',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      'Stops',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: _stops == null || _stops!.isEmpty
+                          ? Center(
+                              child: Text(
+                                'No stops available for this line',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: _stops!.length,
+                              separatorBuilder: (_, __) => const Divider(),
+                              itemBuilder: (context, index) {
+                                final s = _stops![index];
+                                final color = _stopColor(index);
+                                final completed = _isStopCompleted(index);
+                                final isCurrent = index == _currentStopIndex;
+                                return ListTile(
+                                  leading: CircleAvatar(
+                                    radius: 14,
+                                    backgroundColor: color,
+                                    child: Icon(
+                                      _stopIcon(index),
+                                      color: Colors.white,
+                                      size: 16,
+                                    ),
+                                  ),
+                                  title: Text(s.name ?? 'Stop ${index + 1}'),
+                                  subtitle: Text('${s.latitude.toStringAsFixed(5)}, ${s.longitude.toStringAsFixed(5)}'),
+                                  trailing: completed
+                                      ? const Chip(
+                                          label: Text('Afgerond'),
+                                          visualDensity: VisualDensity.compact,
+                                        )
+                                      : TextButton.icon(
+                                          onPressed: () => _markStopCompleted(index),
+                                          icon: const Icon(Icons.check, size: 18),
+                                          label: Text(isCurrent ? 'Afronden' : 'Klaarzetten'),
+                                        ),
+                                  onTap: () => _focusStop(index),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
                 ),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendDot(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryPill(String title, String value, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.16)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: Colors.white, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Colors.white.withOpacity(0.75),
+                        letterSpacing: 0.2,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

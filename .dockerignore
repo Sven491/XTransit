@@ -10,3 +10,7 @@ build
 coverage
 .vscode
 .idea
+ADMIN_DEPLOYMENT_SUMMARY.md
+CI_CD_PORTAINER_GUIDE.md
+DEPLOYMENT.md
+GETTING_STARTED.md

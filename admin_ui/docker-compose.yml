@@ -1,0 +1,9 @@
+version: '3.8'
+services:
+  admin-ui:
+    build: .
+    ports:
+      - "5174:80"
+    environment:
+      VITE_AUTH_API: ${VITE_AUTH_API:-http://localhost:5000}
+      VITE_TRANSIT_API: ${VITE_TRANSIT_API:-http://localhost:5001}

@@ -49,6 +49,7 @@ class RouteCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     final statusColor = _getStatusColor(route.status);
     final startTimeStr = _formatTime(route.startTime);
 
@@ -63,6 +64,9 @@ class RouteCard extends StatelessWidget {
       },
       child: Card(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        elevation: 0,
+        color: colorScheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -77,7 +81,11 @@ class RouteCard extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: Colors.blue,
+                      gradient: LinearGradient(
+                        colors: [colorScheme.primary, colorScheme.tertiary],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
@@ -94,7 +102,7 @@ class RouteCard extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.2),
+                      color: statusColor.withOpacity(0.14),
                       border: Border.all(color: statusColor),
                       borderRadius: BorderRadius.circular(20),
                     ),
@@ -134,7 +142,7 @@ class RouteCard extends StatelessWidget {
                   ),
                   Icon(
                     Icons.arrow_forward,
-                    color: Colors.grey[400],
+                    color: colorScheme.outline,
                   ),
                   Expanded(
                     child: Column(
@@ -181,7 +189,7 @@ class RouteCard extends StatelessWidget {
                       Text(
                         route.busType.licensePlate,
                         style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                              color: Colors.grey[600],
+                              color: colorScheme.onSurfaceVariant,
                             ),
                       ),
                     ],
@@ -199,14 +207,14 @@ class RouteCard extends StatelessWidget {
                         style:
                             Theme.of(context).textTheme.headlineSmall?.copyWith(
                                   fontWeight: FontWeight.bold,
-                                  color: Colors.blue,
+                                  color: colorScheme.primary,
                                 ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         '${route.busLine.estimatedDuration} min duration',
                         style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                              color: Colors.grey[600],
+                              color: colorScheme.onSurfaceVariant,
                             ),
                       ),
                     ],

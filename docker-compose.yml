@@ -14,6 +14,7 @@ services:
       PG_DB: ${POSTGRES_DB}
       PG_USER: ${POSTGRES_USER_AUTH}
       PG_PASS: ${POSTGRES_PASSWORD_AUTH}
+      DEV_BYPASS: ${DEV_BYPASS:-0}
     restart: unless-stopped
 
   employee_api:
@@ -43,4 +44,19 @@ services:
       PG_DB: ${POSTGRES_DB}
       PG_USER: ${POSTGRES_USER_TRANSIT}
       PG_PASS: ${POSTGRES_PASSWORD_TRANSIT}
+      ADMIN_USER_CODES: ${ADMIN_USER_CODES}
+      DEV_MOCK: ${DEV_MOCK:-0}
+    restart: unless-stopped
+
+  admin_ui:
+    image: ghcr.io/sven491/xtransit/admin_ui:latest
+    container_name: admin_ui
+    ports:
+      - "5174:80"
+    environment:
+      VITE_AUTH_API: http://auth_api:5000
+      VITE_TRANSIT_API: http://transit_api:5001
+    depends_on:
+      - auth_api
+      - transit_api
     restart: unless-stopped

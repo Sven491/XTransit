@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/schedule.dart';
+import '../models/navigation.dart';
 import 'auth_service.dart';
 
 /// Schedule/Route Service
@@ -80,6 +81,44 @@ class ScheduleService {
       }
     } catch (e) {
       throw Exception('Status update error: $e');
+    }
+  }
+
+  /// Get stops for a bus line
+  Future<List<NavigationPoint>> getStops(int busLineId) async {
+    try {
+      final headers = await _authService.getAuthHeaders();
+
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/bus-lines/$busLineId/stops'),
+        headers: headers,
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final stops = (data['stops'] as List?)
+                ?.map((s) => s as Map<String, dynamic>)
+                .map((s) {
+                  final lat = (s['latitude'] ?? s['lat']) as num?;
+                  final lon = (s['longitude'] ?? s['lon']) as num?;
+                  final name = (s['name'] ?? s['stop_name'] ?? s['stopName']) as String?;
+                  if (lat == null || lon == null) return null;
+                  return NavigationPoint(
+                    latitude: lat.toDouble(),
+                    longitude: lon.toDouble(),
+                    name: name,
+                  );
+                })
+                .whereType<NavigationPoint>()
+                .toList() ?? [];
+        return stops;
+      } else if (response.statusCode == 401) {
+        throw Exception('Unauthorized - Please login again');
+      } else {
+        throw Exception('Failed to load stops: ${response.statusCode}');
+      }
+    } catch (e) {
+      throw Exception('Get stops error: $e');
     }
   }
 }

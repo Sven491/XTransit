@@ -28,6 +28,7 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
   }
 
   Future<void> _selectDate() async {
+    final colorScheme = Theme.of(context).colorScheme;
     final picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
@@ -36,7 +37,7 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            dialogBackgroundColor: Colors.white,
+            dialogBackgroundColor: colorScheme.surface,
           ),
           child: child!,
         );
@@ -53,236 +54,210 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     final dateStr =
         '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
-    final isToday = DateTime(
-          _selectedDate.year,
-          _selectedDate.month,
-          _selectedDate.day,
-        ) ==
-        DateTime(
-          DateTime.now().year,
-          DateTime.now().month,
-          DateTime.now().day,
-        );
+    final today = DateTime.now();
+    final isToday = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day) ==
+        DateTime(today.year, today.month, today.day);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Your Schedule'),
+        title: const Text('Today on the Road'),
         elevation: 0,
       ),
-      body: Column(
-        children: [
-          // Date selector
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isToday ? 'Today' : 'Scheduled Date',
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: Colors.grey[600],
-                          ),
-                    ),
-                    Text(
-                      dateStr,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
-                  ],
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: Theme.of(context).brightness == Brightness.dark
+                ? const [Color(0xFF0B1220), Color(0xFF111827)]
+                : const [Color(0xFFF1F5F9), Color(0xFFE2E8F0)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0F172A), Color(0xFF1D4ED8)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-                OutlinedButton.icon(
-                  onPressed: _selectDate,
-                  icon: const Icon(Icons.calendar_today),
-                  label: const Text('Change'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.16),
+                    blurRadius: 22,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isToday ? 'Vandaag' : 'Geplande datum',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.white.withOpacity(0.78),
+                        ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    dateStr,
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Routes, stops en status in één overzicht',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.white.withOpacity(0.84),
+                        ),
+                  ),
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: SizedBox(
+                      height: 48,
+                      child: OutlinedButton.icon(
+                        onPressed: _selectDate,
+                        icon: const Icon(Icons.calendar_today, size: 18),
+                        label: const Text('Wijzig'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: BorderSide(color: Colors.white.withOpacity(0.28)),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const Divider(),
+            Expanded(
+              child: FutureBuilder<DailySchedule>(
+                future: _scheduleFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
 
-          // Routes list
-          Expanded(
-            child: FutureBuilder<DailySchedule>(
-              future: _scheduleFuture,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(),
-                  );
-                }
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.error_outline,
+                              size: 64,
+                              color: colorScheme.error,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Failed to load schedule',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              snapshot.error.toString(),
+                              style: Theme.of(context).textTheme.bodySmall,
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 24),
+                            FilledButton.icon(
+                              onPressed: _refreshSchedule,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
 
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  if (!snapshot.hasData || snapshot.data!.routes.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.calendar_today,
+                              size: 64,
+                              color: colorScheme.outline,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No routes scheduled',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Check back later for your schedule',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  final routes = snapshot.data!.routes;
+                  final scheduledRoutes = routes.where((r) => r.status == 'scheduled').toList();
+                  final inProgressRoutes = routes.where((r) => r.status == 'in_progress').toList();
+                  final completedRoutes = routes.where((r) => r.status == 'completed').toList();
+
+                  return RefreshIndicator(
+                    onRefresh: _refreshSchedule,
+                    child: ListView(
+                      padding: const EdgeInsets.only(bottom: 16),
                       children: [
-                        Icon(
-                          Icons.error_outline,
-                          size: 64,
-                          color: Colors.red[300],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Failed to load schedule',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
+                        if (inProgressRoutes.isNotEmpty) ...[
+                          _sectionHeader('In Progress', colorScheme.tertiary),
+                          ...inProgressRoutes.map((route) => RouteCard(route: route, onTap: () {})),
+                        ],
+                        if (scheduledRoutes.isNotEmpty) ...[
+                          _sectionHeader('Scheduled', colorScheme.primary),
+                          ...scheduledRoutes.map((route) => RouteCard(route: route, onTap: () {})),
+                        ],
+                        if (completedRoutes.isNotEmpty) ...[
+                          _sectionHeader('Completed', colorScheme.secondary),
+                          ...completedRoutes.map((route) => RouteCard(route: route, onTap: () {})),
+                        ],
                         const SizedBox(height: 8),
-                        Text(
-                          snapshot.error.toString(),
-                          style: Theme.of(context).textTheme.bodySmall,
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 24),
-                        FilledButton.icon(
-                          onPressed: _refreshSchedule,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Retry'),
-                        ),
                       ],
                     ),
                   );
-                }
-
-                if (!snapshot.hasData || snapshot.data!.routes.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.calendar_today,
-                          size: 64,
-                          color: Colors.grey[300],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No routes scheduled',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Check back later for your schedule',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: Colors.grey[600],
-                              ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                final schedule = snapshot.data!;
-                final routes = schedule.routes;
-
-                // Separate routes by status
-                final scheduledRoutes = routes
-                    .where((r) => r.status == 'scheduled')
-                    .toList();
-                final inProgressRoutes = routes
-                    .where((r) => r.status == 'in_progress')
-                    .toList();
-                final completedRoutes = routes
-                    .where((r) => r.status == 'completed')
-                    .toList();
-
-                return RefreshIndicator(
-                  onRefresh: _refreshSchedule,
-                  child: ListView(
-                    children: [
-                      // In Progress section
-                      if (inProgressRoutes.isNotEmpty) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(
-                            left: 16,
-                            top: 24,
-                            bottom: 8,
-                          ),
-                          child: Text(
-                            'In Progress',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.orange,
-                                ),
-                          ),
-                        ),
-                        ...inProgressRoutes.map((route) => RouteCard(
-                          route: route,
-                          onTap: () {},
-                        )),
-                      ],
-
-                      // Scheduled section
-                      if (scheduledRoutes.isNotEmpty) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(
-                            left: 16,
-                            top: 24,
-                            bottom: 8,
-                          ),
-                          child: Text(
-                            'Scheduled',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.blue,
-                                ),
-                          ),
-                        ),
-                        ...scheduledRoutes.map((route) => RouteCard(
-                          route: route,
-                          onTap: () {},
-                        )),
-                      ],
-
-                      // Completed section
-                      if (completedRoutes.isNotEmpty) ...[
-                        Padding(
-                          padding: const EdgeInsets.only(
-                            left: 16,
-                            top: 24,
-                            bottom: 8,
-                          ),
-                          child: Text(
-                            'Completed',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.green,
-                                ),
-                          ),
-                        ),
-                        ...completedRoutes.map((route) => RouteCard(
-                          route: route,
-                          onTap: () {},
-                        )),
-                      ],
-
-                      const SizedBox(height: 16),
-                    ],
-                  ),
-                );
-              },
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, top: 24, bottom: 8),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
       ),
     );
   }

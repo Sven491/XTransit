@@ -1,15 +1,19 @@
 # Docker Setup voor Transit Project APIs
 
-Dit project bevat Docker-configuratie voor alle 3 APIs en PostgreSQL database.
+Dit project bevat Docker-configuratie voor alle APIs, Admin Control Center en PostgreSQL database.
 
 ## Bestanden
 
 - **auth_api/Dockerfile** - Image voor Authentication API (port 5000)
 - **employee_api/Dockerfile** - Image voor Employee API (port 4000)
 - **transit_api/Dockerfile** - Image voor Transit API (port 5001)
+- **admin_ui/Dockerfile** - Image voor Admin Control Center (port 5174)
 - **docker-compose.yml** - Orchestratie van alle services
 - **.dockerignore** - Bestanden die niet in Docker images opgenomen worden
 - **.env.example** - Template voor environment variabelen
+- **DEPLOYMENT.md** - Gedetailleerde deployment guide
+- **scripts/deploy.sh** - Deployment helper script
+- **scripts/build-and-push.sh** - Build en push script voor registry
 
 ## Vereisten
 
@@ -28,11 +32,14 @@ cp .env.example .env
 ### 2. Services starten
 
 ```bash
-# Start alle services (database + alle APIs)
+# Start alle services (APIs + Admin UI)
 docker-compose up -d
 
 # Of build en start tegelijk (als je code hebt aangepast)
 docker-compose up -d --build
+
+# Quick start met script
+./scripts/deploy.sh start
 ```
 
 ### 3. Logs bekijken
@@ -43,23 +50,37 @@ docker-compose logs -f
 
 # Logs van specifieke service
 docker-compose logs -f auth_api
-docker-compose logs -f employee_api
 docker-compose logs -f transit_api
-docker-compose logs -f db
+docker-compose logs -f admin_ui
+
+# Via script
+./scripts/deploy.sh logs admin_ui
 ```
 
 ## Beschikbare Services
 
-| Service | Port | Database | Beschrijving |
-|---------|------|----------|--------------|
-| auth_api | 5000 | PostgreSQL | Authentication endpoints |
-| employee_api | 4000 | PostgreSQL | Employee management endpoints |
-| transit_api | 5001 | PostgreSQL | Transit schedule endpoints |
-| db | 5432 | - | PostgreSQL database server |
+| Service | Port | Beschrijving |
+|---------|------|--------------|
+| admin_ui | 5174 | Admin Control Center (React + Nginx) |
+| auth_api | 5000 | Authentication endpoints |
+| employee_api | 4000 | Employee management endpoints |
+| transit_api | 5001 | Transit management endpoints |
 
 ## Commando's
 
-### Services beheren
+### Services beheren (Quick way)
+
+```bash
+# Via helper script
+./scripts/deploy.sh start       # Start alle services
+./scripts/deploy.sh stop        # Stop alle services
+./scripts/deploy.sh restart     # Herstart alle services
+./scripts/deploy.sh status      # Show status
+./scripts/deploy.sh logs        # Bekijk logs admin_ui
+./scripts/deploy.sh logs transit_api  # Bekijk logs specifieke service
+```
+
+### Services beheren (Docker compose)
 
 ```bash
 # Start services
@@ -80,6 +101,7 @@ docker-compose down -v
 ```bash
 # Herstart specifieke service
 docker-compose restart auth_api
+docker-compose restart admin_ui
 
 # Build specifieke image
 docker-compose build auth_api
@@ -88,17 +110,17 @@ docker-compose build auth_api
 docker-compose logs -f transit_api
 ```
 
-### Database commando's
+### Admin UI
 
 ```bash
-# Verbinding met database
-docker-compose exec db psql -U transit_user -d transit_db
+# Bekijk Admin UI
+http://localhost:5174
 
-# Database backup
-docker-compose exec db pg_dump -U transit_user transit_db > backup.sql
+# Logs
+docker-compose logs -f admin_ui
 
-# Database restore
-docker-compose exec -T db psql -U transit_user transit_db < backup.sql
+# Shell in container
+docker-compose exec admin_ui sh
 ```
 
 ## Troubleshooting
@@ -127,6 +149,54 @@ docker-compose logs auth_api
 
 # Controleer environment variabelen in .env
 # Controleer database connection string
+```
+
+### Admin UI niet bereikbaar
+```bash
+# Check Admin UI container
+docker-compose logs admin_ui
+
+# Zorg ervoor dat poort 5174 niet in gebruik is
+lsof -i :5174
+```
+
+## Admin Control Center
+
+De Admin UI is een modern React + Vite applicatie die alle admin functies biedt.
+
+### Features
+
+- **Authenticatie**: JWT-based login met dev token helper
+- **Stops Management**: Create en beheer transit stops met geo-coördinaten
+- **Bus Lines**: Define bus routes met start/end stops en reistijd
+- **Fleet Management**: Monitor fleet vehicles
+- **Stop Linking**: Assign stops aan bus lines met volgorde en ETA
+
+### Toegang
+
+```
+URL: http://localhost:5174
+```
+
+### Deployment Configuratie
+
+Environment variabelen in docker-compose.yml:
+- `VITE_AUTH_API`: URL naar auth_api (standaard: http://auth_api:5000)
+- `VITE_TRANSIT_API`: URL naar transit_api (standaard: http://transit_api:5001)
+
+Voor externe toegang, update de URLs naar je deployment domain.
+
+### Build en Deployment
+
+```bash
+# Build Admin UI image
+docker-compose build admin_ui
+
+# Push naar registry
+./scripts/build-and-push.sh ghcr.io/your-org/xtransit latest
+
+# Deploy met updated image
+docker-compose up -d
 ```
 
 ## Development

@@ -7,6 +7,17 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
+// Simple CORS middleware for browser-based admin UI testing.
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 const JWT_SECRET = process.env.JWT_SECRET;
 
 
@@ -43,6 +54,17 @@ app.get('/me', async (req, res) => {
     res.status(401).json({ error: 'invalid_token' });
   }
 });
+
+// Development helper: issue a token without DB checks when DEV_BYPASS=1
+if (process.env.DEV_BYPASS === '1') {
+  app.post('/dev/token', (req, res) => {
+    const { userId, userCode } = req.body || {};
+    if (!userId || !userCode) return res.status(400).json({ error: 'userId and userCode required' });
+    const payload = { userId: Number(userId), userCode: Number(userCode) };
+    const token = jwt.sign(payload, JWT_SECRET || 'devsecret', { expiresIn: '7d' });
+    res.json({ token, user: payload });
+  });
+}
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Auth API listening on ${PORT}`));

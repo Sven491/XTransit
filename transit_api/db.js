@@ -6,6 +6,8 @@ const pool = new Pool({
     user: process.env.PG_USER,
     password: process.env.PG_PASS,
     database: process.env.PG_DB,
+  // Ensure unqualified table names resolve to transit schema first.
+  options: '-c search_path=transit,public',
     max: 10,
     idleTimeoutMillis: 30000
 });

@@ -47,25 +47,167 @@ class NavigationService {
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-
-        if (data['code'] != 'Ok') {
-          throw Exception('Route not found: ${data['message']}');
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        if (data == null) {
+          throw Exception('Empty response from routing service');
         }
 
-        final route = NavigationRoute.fromJson(data);
+        if (data['code'] != 'Ok') {
+          throw Exception('Route not found: ${data['message'] ?? 'Unknown error'}');
+        }
 
-        // Set start and end points properly
-        return NavigationRoute(
+        final routes = data['routes'] as List?;
+        if (routes == null || routes.isEmpty) {
+          throw Exception('No route found in response');
+        }
+
+        final routeData = routes.first as Map<String, dynamic>;
+        return NavigationRoute.fromOsrmRouteData(
+          routeData,
           start: start,
           end: end,
-          legs: route.legs,
-          totalDistance: route.totalDistance,
-          totalDuration: route.totalDuration,
         );
       } else {
         throw Exception('Failed to get route: ${response.statusCode}');
       }
+    } catch (e) {
+      throw Exception('Navigation error: $e');
+    }
+  }
+
+  /// Get a route that passes through the provided stops in the given order.
+  Future<NavigationRoute> getRouteThroughStops({
+    required List<NavigationPoint> stops,
+  }) async {
+    try {
+      if (stops.length < 2) {
+        throw Exception('At least two stops are required');
+      }
+
+      final coordinates = stops
+          .map((stop) => '${stop.longitude},${stop.latitude}')
+          .join(';');
+      final url =
+          '$_osrmBaseUrl/$coordinates?overview=full&steps=true&geometries=geojson&source=first&destination=last';
+
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to get route: ${response.statusCode}');
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>?;
+      if (data == null) {
+        throw Exception('Empty response from routing service');
+      }
+
+      if (data['code'] != 'Ok') {
+        throw Exception('Route not found: ${data['message'] ?? 'Unknown error'}');
+      }
+
+      final routes = data['routes'] as List?;
+      if (routes == null || routes.isEmpty) {
+        throw Exception('No route found in response');
+      }
+
+      final routeData = routes.first as Map<String, dynamic>;
+      return NavigationRoute.fromOsrmRouteData(
+        routeData,
+        start: stops.first,
+        end: stops.last,
+      );
+    } catch (e) {
+      throw Exception('Navigation error: $e');
+    }
+  }
+
+  /// Get an optimized trip through multiple stops.
+  /// Keeps the first and last stops fixed and lets OSRM order the intermediates.
+  Future<OptimizedRouteResult> getOptimizedRouteThroughStops({
+    required List<NavigationPoint> stops,
+  }) async {
+    try {
+      if (stops.length < 2) {
+        throw Exception('At least two stops are required');
+      }
+
+      final coordinates = stops
+          .map((stop) => '${stop.longitude},${stop.latitude}')
+          .join(';');
+      final url =
+          'https://router.project-osrm.org/trip/v1/car/$coordinates?overview=full&steps=true&geometries=geojson&source=first&destination=last&roundtrip=false';
+
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to get optimized route: ${response.statusCode}');
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>?;
+      if (data == null) {
+        throw Exception('Empty response from routing service');
+      }
+
+      if (data['code'] != 'Ok') {
+        throw Exception('Optimized route not found: ${data['message'] ?? 'Unknown error'}');
+      }
+
+      final trips = data['trips'] as List?;
+      if (trips == null || trips.isEmpty) {
+        throw Exception('No optimized trip found');
+      }
+
+      final trip = trips.first as Map<String, dynamic>;
+      final geometry = trip['geometry'] as Map<String, dynamic>?;
+      final coordinatesData = geometry?['coordinates'] as List? ?? [];
+      final points = coordinatesData
+          .map((coord) {
+            if (coord is List && coord.length >= 2) {
+              return NavigationPoint(
+                latitude: (coord[1] as num).toDouble(),
+                longitude: (coord[0] as num).toDouble(),
+              );
+            }
+            return null;
+          })
+          .whereType<NavigationPoint>()
+          .toList();
+
+      final waypointItems = (data['waypoints'] as List?) ?? [];
+      final orderedPairs = <MapEntry<int, NavigationPoint>>[];
+
+      for (var i = 0; i < waypointItems.length && i < stops.length; i++) {
+        final waypoint = waypointItems[i];
+        if (waypoint is! Map<String, dynamic>) continue;
+        final index = waypoint['waypoint_index'] as num?;
+        if (index == null) continue;
+        orderedPairs.add(MapEntry(index.toInt(), stops[i]));
+      }
+
+      orderedPairs.sort((a, b) => a.key.compareTo(b.key));
+      final orderedStops = orderedPairs.isNotEmpty
+          ? orderedPairs.map((entry) => entry.value).toList()
+          : stops;
+
+      final route = NavigationRoute(
+        start: orderedStops.first,
+        end: orderedStops.last,
+        legs: [
+          RouteLeg.fromPoints(
+            points: points,
+            distance: (trip['distance'] as num?)?.toDouble() ?? 0.0,
+            duration: (trip['duration'] as num?)?.toInt() ?? 0,
+            summary: 'Optimized trip',
+          ),
+        ],
+        totalDistance: (trip['distance'] as num?)?.toDouble() ?? 0.0,
+        totalDuration: (trip['duration'] as num?)?.toInt() ?? 0,
+      );
+
+      return OptimizedRouteResult(
+        route: route,
+        orderedStops: orderedStops.isNotEmpty ? orderedStops : stops,
+      );
     } catch (e) {
       throw Exception('Navigation error: $e');
     }
@@ -86,26 +228,30 @@ class NavigationService {
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-
-        if (data['code'] != 'Ok') {
-          throw Exception('Routes not found: ${data['message']}');
+        final data = jsonDecode(response.body) as Map<String, dynamic>?;
+        if (data == null) {
+          throw Exception('Empty response from routing service');
         }
 
-        final routes = (data['routes'] as List)
+        if (data['code'] != 'Ok') {
+          throw Exception('Routes not found: ${data['message'] ?? 'Unknown error'}');
+        }
+
+        final routesData = data['routes'] as List?;
+        if (routesData == null || routesData.isEmpty) {
+          throw Exception('No routes found in response');
+        }
+
+        final routes = routesData
             .map((routeData) {
-              return NavigationRoute(
+              if (routeData is! Map<String, dynamic>) return null;
+              return NavigationRoute.fromOsrmRouteData(
+                routeData,
                 start: start,
                 end: end,
-                legs: (routeData['legs'] as List)
-                    .map((leg) =>
-                        RouteLeg.fromJson(leg as Map<String, dynamic>))
-                    .toList(),
-                totalDistance:
-                    (routeData['distance'] as num).toDouble(),
-                totalDuration: (routeData['duration'] as num).toInt(),
               );
             })
+            .whereType<NavigationRoute>()
             .toList();
 
         return routes;
@@ -124,5 +270,38 @@ class NavigationService {
       LatLng(p1.latitude, p1.longitude),
       LatLng(p2.latitude, p2.longitude),
     );
+  }
+
+  /// Geocode a place name to coordinates using Nominatim (OpenStreetMap)
+  Future<NavigationPoint> geocodePlace(String name) async {
+    try {
+      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+        'q': name,
+        'format': 'json',
+        'limit': '1',
+      });
+
+      final response = await http.get(uri, headers: {
+        'User-Agent': 'bus-terminal-app',
+      });
+
+      if (response.statusCode != 200) {
+        throw Exception('Geocoding failed: ${response.statusCode}');
+      }
+
+      final list = jsonDecode(response.body) as List<dynamic>?;
+      if (list == null || list.isEmpty) {
+        throw Exception('No geocoding result for "$name"');
+      }
+
+      final item = list[0] as Map<String, dynamic>;
+      final lat = double.parse(item['lat'] as String);
+      final lon = double.parse(item['lon'] as String);
+      final display = item['display_name'] as String? ?? name;
+
+      return NavigationPoint(latitude: lat, longitude: lon, name: display);
+    } catch (e) {
+      throw Exception('Geocode error: $e');
+    }
   }
 }

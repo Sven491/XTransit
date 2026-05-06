@@ -37,6 +37,8 @@ class _CustomInputFieldState extends State<CustomInputField> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -54,13 +56,30 @@ class _CustomInputFieldState extends State<CustomInputField> {
           validator: widget.validator,
           decoration: InputDecoration(
             hintText: widget.hint,
-            hintStyle: Theme.of(context).textTheme.bodyMedium,
+            hintStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 16,
               vertical: 16, // Larger vertical padding for touch targets
             ),
+            prefixIcon: Icon(
+              widget.obscureText ? Icons.lock_outline : Icons.badge_outlined,
+              color: colorScheme.primary,
+            ),
+            filled: true,
+            fillColor: colorScheme.surface,
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(color: colorScheme.outline.withOpacity(0.25)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(color: colorScheme.outline.withOpacity(0.25)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(color: colorScheme.primary, width: 2),
             ),
             suffixIcon: widget.obscureText
                 ? GestureDetector(
@@ -70,6 +89,7 @@ class _CustomInputFieldState extends State<CustomInputField> {
                     child: Icon(
                       _obscureText ? Icons.visibility_off : Icons.visibility,
                       size: 28, // Larger icon for accessibility
+                      color: colorScheme.primary,
                     ),
                   )
                 : null,

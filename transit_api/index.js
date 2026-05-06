@@ -9,6 +9,37 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// Development mock storage when DEV_MOCK=1
+const DEV_MOCK = process.env.DEV_MOCK === '1';
+const _mock = {
+  stops: [],
+  routeStops: [],
+  busLines: [],
+  fleetBuses: [],
+  nextStopId: 1,
+  nextRouteStopId: 1,
+  nextBusLineId: 1,
+  nextFleetBusId: 1,
+};
+
+const adminUserCodes = new Set(
+  (process.env.ADMIN_USER_CODES || '')
+    .split(',')
+    .map(code => code.trim())
+    .filter(Boolean)
+    .map(code => Number(code))
+    .filter(code => Number.isFinite(code))
+);
+
+const adminMiddleware = (req, res, next) => {
+  const userCode = Number(req.user?.userCode);
+  if (!Number.isFinite(userCode) || !adminUserCodes.has(userCode)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  next();
+};
+
 // ============================================
 // ROUTES - Get daily schedule
 // ============================================
@@ -141,18 +172,33 @@ app.get('/routes/:routeId', authMiddleware, async (req, res) => {
 app.get('/bus-lines/:busLineId/stops', authMiddleware, async (req, res) => {
   try {
     const { busLineId } = req.params;
+    if (DEV_MOCK) {
+      const stops = _mock.routeStops
+        .filter(rs => String(rs.busLineId) === String(busLineId))
+        .sort((a,b) => a.stopOrder - b.stopOrder)
+        .map(rs => ({
+          id: rs.id,
+          order: rs.stopOrder,
+          name: rs.name,
+          latitude: rs.latitude,
+          longitude: rs.longitude,
+          estimatedArrivalMinutes: rs.estimatedArrivalMinutes,
+        }));
+      return res.json({ stops });
+    }
 
     const result = await db.query(`
-      SELECT 
-        id,
-        stop_order,
-        stop_name,
-        latitude,
-        longitude,
-        estimated_arrival_minutes
-      FROM route_stops
-      WHERE bus_line_id = $1
-      ORDER BY stop_order ASC
+      SELECT
+        rs.id,
+        rs.stop_order,
+        s.name as stop_name,
+        s.latitude,
+        s.longitude,
+        rs.estimated_arrival_minutes
+      FROM transit.route_stops rs
+      JOIN transit.stops s ON s.id = rs.stop_id
+      WHERE rs.bus_line_id = $1
+      ORDER BY rs.stop_order ASC
     `, [busLineId]);
 
     const stops = result.rows.map(row => ({
@@ -165,6 +211,353 @@ app.get('/bus-lines/:busLineId/stops', authMiddleware, async (req, res) => {
     }));
 
     res.json({ stops });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Create reusable stop
+// ============================================
+app.get('/admin/stops', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (DEV_MOCK) {
+      return res.json({ stops: _mock.stops.slice().sort((a, b) => a.id - b.id) });
+    }
+
+    const result = await db.query(`
+      SELECT id, name, latitude, longitude, created_at, updated_at
+      FROM transit.stops
+      ORDER BY id ASC
+    `);
+
+    res.json({
+      stops: result.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        latitude: parseFloat(row.latitude),
+        longitude: parseFloat(row.longitude),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.post('/admin/stops', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { name, latitude, longitude } = req.body;
+
+    if (!name || latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ error: 'missing_required_fields' });
+    }
+
+    if (DEV_MOCK) {
+      const stop = {
+        id: _mock.nextStopId++,
+        name,
+        latitude: parseFloat(latitude),
+        longitude: parseFloat(longitude),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      _mock.stops.push(stop);
+      return res.status(201).json({ stop });
+    }
+
+    const result = await db.query(`
+      WITH next_id AS (
+        SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.stops
+      )
+      INSERT INTO transit.stops (id, name, latitude, longitude)
+      SELECT next_id.id, $1, $2, $3
+      FROM next_id
+      RETURNING id, name, latitude, longitude, created_at, updated_at
+    `, [name, latitude, longitude]);
+
+    const stop = result.rows[0];
+    res.status(201).json({
+      stop: {
+        id: stop.id,
+        name: stop.name,
+        latitude: parseFloat(stop.latitude),
+        longitude: parseFloat(stop.longitude),
+        createdAt: stop.created_at,
+        updatedAt: stop.updated_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Manage bus lines
+// ============================================
+app.get('/admin/bus-lines', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (DEV_MOCK) {
+      return res.json({ busLines: _mock.busLines.slice().sort((a, b) => a.lineNumber - b.lineNumber) });
+    }
+
+    const result = await db.query(`
+      SELECT id, line_number, start_stop, end_stop, estimated_duration_minutes, description
+      FROM transit.bus_lines
+      ORDER BY line_number ASC, id ASC
+    `);
+
+    res.json({
+      busLines: result.rows.map(row => ({
+        id: row.id,
+        lineNumber: row.line_number,
+        startStop: row.start_stop,
+        endStop: row.end_stop,
+        estimatedDurationMinutes: row.estimated_duration_minutes,
+        description: row.description,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.post('/admin/bus-lines', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { lineNumber, startStop, endStop, estimatedDurationMinutes, description } = req.body;
+
+    if (lineNumber === undefined || !startStop || !endStop || estimatedDurationMinutes === undefined) {
+      return res.status(400).json({ error: 'missing_required_fields' });
+    }
+
+    if (DEV_MOCK) {
+      const busLine = {
+        id: _mock.nextBusLineId++,
+        lineNumber: Number(lineNumber),
+        startStop,
+        endStop,
+        estimatedDurationMinutes: Number(estimatedDurationMinutes),
+        description: description || '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      _mock.busLines.push(busLine);
+      return res.status(201).json({ busLine });
+    }
+
+    const result = await db.query(`
+      WITH next_id AS (
+        SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.bus_lines
+      )
+      INSERT INTO transit.bus_lines (id, line_number, start_stop, end_stop, estimated_duration_minutes, description)
+      SELECT next_id.id, $1, $2, $3, $4, $5
+      FROM next_id
+      RETURNING id, line_number, start_stop, end_stop, estimated_duration_minutes, description
+    `, [lineNumber, startStop, endStop, estimatedDurationMinutes, description || null]);
+
+    const busLine = result.rows[0];
+    res.status(201).json({
+      busLine: {
+        id: busLine.id,
+        lineNumber: busLine.line_number,
+        startStop: busLine.start_stop,
+        endStop: busLine.end_stop,
+        estimatedDurationMinutes: busLine.estimated_duration_minutes,
+        description: busLine.description,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.patch('/admin/bus-lines/:busLineId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { busLineId } = req.params;
+    const { lineNumber, startStop, endStop, estimatedDurationMinutes, description } = req.body;
+
+    if (DEV_MOCK) {
+      const existing = _mock.busLines.find(line => String(line.id) === String(busLineId));
+      if (!existing) return res.status(404).json({ error: 'bus_line_not_found' });
+      if (lineNumber !== undefined) existing.lineNumber = Number(lineNumber);
+      if (startStop !== undefined) existing.startStop = startStop;
+      if (endStop !== undefined) existing.endStop = endStop;
+      if (estimatedDurationMinutes !== undefined) existing.estimatedDurationMinutes = Number(estimatedDurationMinutes);
+      if (description !== undefined) existing.description = description;
+      existing.updatedAt = new Date().toISOString();
+      return res.json({ busLine: existing });
+    }
+
+    const result = await db.query(`
+      UPDATE transit.bus_lines
+      SET
+        line_number = COALESCE($1, line_number),
+        start_stop = COALESCE($2, start_stop),
+        end_stop = COALESCE($3, end_stop),
+        estimated_duration_minutes = COALESCE($4, estimated_duration_minutes),
+        description = COALESCE($5, description)
+      WHERE id = $6
+      RETURNING id, line_number, start_stop, end_stop, estimated_duration_minutes, description
+    `, [lineNumber ?? null, startStop ?? null, endStop ?? null, estimatedDurationMinutes ?? null, description ?? null, busLineId]);
+
+    if (!result.rows[0]) return res.status(404).json({ error: 'bus_line_not_found' });
+
+    const busLine = result.rows[0];
+    res.json({
+      busLine: {
+        id: busLine.id,
+        lineNumber: busLine.line_number,
+        startStop: busLine.start_stop,
+        endStop: busLine.end_stop,
+        estimatedDurationMinutes: busLine.estimated_duration_minutes,
+        description: busLine.description,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Manage fleet buses
+// ============================================
+app.get('/admin/fleet/buses', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (DEV_MOCK) {
+      return res.json({ buses: _mock.fleetBuses.slice().sort((a, b) => a.id - b.id) });
+    }
+
+    const result = await db.query(`
+      SELECT id, name, seat_capacity, license_plate
+      FROM fleet.bus
+      ORDER BY id ASC
+    `);
+
+    res.json({
+      buses: result.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        seatCapacity: row.seat_capacity,
+        licensePlate: row.license_plate,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.post('/admin/fleet/buses', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { name, seatCapacity, licensePlate } = req.body;
+
+    if (!name || seatCapacity === undefined || !licensePlate) {
+      return res.status(400).json({ error: 'missing_required_fields' });
+    }
+
+    if (DEV_MOCK) {
+      const bus = {
+        id: _mock.nextFleetBusId++,
+        name,
+        seatCapacity: Number(seatCapacity),
+        licensePlate,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      _mock.fleetBuses.push(bus);
+      return res.status(201).json({ bus });
+    }
+
+    const result = await db.query(`
+      WITH next_id AS (
+        SELECT COALESCE(MAX(id), 0) + 1 AS id FROM fleet.bus
+      )
+      INSERT INTO fleet.bus (id, name, seat_capacity, license_plate)
+      SELECT next_id.id, $1, $2, $3
+      FROM next_id
+      RETURNING id, name, seat_capacity, license_plate
+    `, [name, seatCapacity, licensePlate]);
+
+    const bus = result.rows[0];
+    res.status(201).json({
+      bus: {
+        id: bus.id,
+        name: bus.name,
+        seatCapacity: bus.seat_capacity,
+        licensePlate: bus.license_plate,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Link stop to bus line
+// ============================================
+app.post('/admin/bus-lines/:busLineId/stops', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { busLineId } = req.params;
+    const { stopId, stopOrder, estimatedArrivalMinutes } = req.body;
+
+    if (!stopId || stopOrder === undefined) {
+      return res.status(400).json({ error: 'missing_required_fields' });
+    }
+
+    if (DEV_MOCK) {
+      const stop = _mock.stops.find(s => String(s.id) === String(stopId));
+      const routeStop = {
+        id: _mock.nextRouteStopId++,
+        busLineId: Number(busLineId),
+        stopId: Number(stopId),
+        stopOrder: Number(stopOrder),
+        estimatedArrivalMinutes: estimatedArrivalMinutes ?? null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        name: stop ? stop.name : `stop-${stopId}`,
+        latitude: stop ? stop.latitude : 0,
+        longitude: stop ? stop.longitude : 0,
+      };
+      // remove existing with same busLineId & stopOrder
+      _mock.routeStops = _mock.routeStops.filter(rs => !(rs.busLineId === routeStop.busLineId && rs.stopOrder === routeStop.stopOrder));
+      _mock.routeStops.push(routeStop);
+      return res.status(201).json({ routeStop });
+    }
+
+    const result = await db.query(`
+      WITH next_id AS (
+        SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.route_stops
+      )
+      INSERT INTO transit.route_stops (id, bus_line_id, stop_id, stop_order, estimated_arrival_minutes)
+      SELECT next_id.id, $1, $2, $3, $4
+      FROM next_id
+      ON CONFLICT (bus_line_id, stop_order) DO UPDATE SET
+        stop_id = EXCLUDED.stop_id,
+        estimated_arrival_minutes = EXCLUDED.estimated_arrival_minutes,
+        updated_at = NOW()
+      RETURNING id, bus_line_id, stop_id, stop_order, estimated_arrival_minutes, created_at, updated_at
+    `, [busLineId, stopId, stopOrder, estimatedArrivalMinutes ?? null]);
+
+    const link = result.rows[0];
+    res.status(201).json({
+      routeStop: {
+        id: link.id,
+        busLineId: link.bus_line_id,
+        stopId: link.stop_id,
+        stopOrder: link.stop_order,
+        estimatedArrivalMinutes: link.estimated_arrival_minutes,
+        createdAt: link.created_at,
+        updatedAt: link.updated_at,
+      },
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal_error', details: err.message });

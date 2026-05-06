@@ -42,6 +42,7 @@ PG_USER=your_user
 PG_PASS=your_password
 PG_DB=your_database
 JWT_SECRET=your_jwt_secret
+ADMIN_USER_CODES=12345,67890
 PORT=5001
 ```
 
@@ -168,6 +169,32 @@ Alle endpoints vereisen een `Authorization: Bearer {token}` header.
 - Body: `{ "status": "in_progress" }`
 - Valid statuses: `scheduled`, `in_progress`, `completed`, `cancelled`
 
+### Admin
+
+Alle admin-endpoints vereisen naast een geldig JWT-token ook dat je `userCode` voorkomt in `ADMIN_USER_CODES`.
+
+**POST** `/admin/stops`
+- Maak een herbruikbare stop aan
+- Body:
+```json
+{
+  "name": "Central Station",
+  "latitude": 52.5200,
+  "longitude": 13.4050
+}
+```
+
+**POST** `/admin/bus-lines/:busLineId/stops`
+- Koppel een bestaande stop aan een buslijn
+- Body:
+```json
+{
+  "stopId": 1,
+  "stopOrder": 1,
+  "estimatedArrivalMinutes": 0
+}
+```
+
 ## Database Schema
 
 ### bus_types
@@ -182,6 +209,18 @@ Alle endpoints vereisen een `Authorization: Bearer {token}` header.
 - `start_stop` - Start stop name
 - `end_stop` - End stop name
 - `estimated_duration_minutes` - Expected route duration
+
+### stops
+- `id` - Primary key
+- `name` - Stop name
+- `latitude`, `longitude` - Stop location
+
+### route_stops
+- `id` - Primary key
+- `bus_line_id` - Which bus line the stop belongs to
+- `stop_id` - Reusable stop reference
+- `stop_order` - Stop sequence on that bus line
+- `estimated_arrival_minutes` - Optional ETA per stop
 
 ### routes
 - `id` - Primary key
