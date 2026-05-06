@@ -1459,7 +1459,22 @@ app.get('/schedules', async (req, res) => {
     const { date, lineId } = req.query;
 
     if (DEV_MOCK) {
-      return res.json({ schedules: _mock.schedules || [] });
+      const schedules = (_mock.schedules || []).map(s => {
+        const busLine = _mock.busLines.find(bl => bl.id === s.busLineId);
+        const bus = _mock.fleetBuses.find(b => b.id === s.busId);
+        return {
+          id: s.id,
+          busLineId: s.busLineId,
+          busId: s.busId,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          weekdays: s.weekdays || [],
+          status: s.status,
+          lineNumber: busLine?.lineNumber || 0,
+          busName: bus?.name || 'Unknown Bus',
+        };
+      });
+      return res.json({ schedules });
     }
 
     let query = `
