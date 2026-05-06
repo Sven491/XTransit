@@ -1051,18 +1051,21 @@ app.get('/admin/drivers', authMiddleware, adminMiddleware, async (req, res) => {
     }
 
     const result = await db.query(`
-      SELECT id, name, email, phone
+      SELECT id, firstname, lastname, email, phone, job, joined, status
       FROM workers.employees
       WHERE status = 'active'
-      ORDER BY name ASC
+      ORDER BY firstname, lastname ASC
     `);
 
     res.json({
       drivers: result.rows.map(row => ({
         id: row.id,
-        name: row.name,
+        name: (String(row.firstname || '') + ' ' + String(row.lastname || '')).trim(),
         email: row.email,
         phone: row.phone,
+        job: row.job,
+        joined: row.joined,
+        status: row.status,
       })),
     });
   } catch (err) {
@@ -1099,7 +1102,7 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
         bl.estimated_duration_minutes,
         b.name as bus_name,
         b.license_plate,
-        e.name as driver_name
+        TRIM(COALESCE(e.firstname, '') || ' ' || COALESCE(e.lastname, '')) as driver_name
       FROM transit.schedules s
       LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
       LEFT JOIN fleet.bus b ON s.bus_id = b.id

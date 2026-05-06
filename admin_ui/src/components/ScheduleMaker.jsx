@@ -10,6 +10,7 @@ export default function ScheduleMaker({ token, user }) {
   const [busLines, setBusLines] = useState([])
   const [buses, setBuses] = useState([])
   const [drivers, setDrivers] = useState([])
+  const [selectedDriverFilter, setSelectedDriverFilter] = useState('')
   const [message, setMessage] = useState(null)
   const [isAdmin] = useState(Boolean(user?.userCode))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -137,9 +138,12 @@ export default function ScheduleMaker({ token, user }) {
     return date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
   }
 
-  // Group schedules by date and time
+  // Group schedules by date and time (apply driver filter if selected)
   const timeSlots = generateTimeSlots()
-  const schedulesBySlot = groupSchedulesByTimeSlot(schedules, timeSlots)
+  const filteredSchedules = selectedDriverFilter
+    ? schedules.filter(s => String(s.driverId) === String(selectedDriverFilter))
+    : schedules
+  const schedulesBySlot = groupSchedulesByTimeSlot(filteredSchedules, timeSlots)
 
   return (
     <section className="card">
@@ -148,7 +152,19 @@ export default function ScheduleMaker({ token, user }) {
           <h2>Diensten Inplannen</h2>
           <p>Maak diensten aan met automatische eindtijd, vertrektijden per halte en herhaald rooster.</p>
         </div>
-        <button className="secondary" onClick={loadSchedules}>Refresh</button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <button className="secondary" onClick={loadSchedules}>Refresh</button>
+          <select
+            value={selectedDriverFilter}
+            onChange={e => setSelectedDriverFilter(e.target.value)}
+            style={{ padding: '6px', borderRadius: '6px', border: '1px solid #ccc' }}
+          >
+            <option value="">Alle chauffeurs</option>
+            {drivers.map(d => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {isAdmin && (
