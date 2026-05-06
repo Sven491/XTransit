@@ -55,16 +55,10 @@ app.get('/me', async (req, res) => {
   }
 });
 
-// Development helper: issue a token without DB checks when DEV_BYPASS=1
-if (process.env.DEV_BYPASS === '1') {
-  app.post('/dev/token', (req, res) => {
-    const { userId, userCode } = req.body || {};
-    if (!userId || !userCode) return res.status(400).json({ error: 'userId and userCode required' });
-    const payload = { userId: Number(userId), userCode: Number(userCode) };
-    const token = jwt.sign(payload, JWT_SECRET || 'devsecret', { expiresIn: '7d' });
-    res.json({ token, user: payload });
-  });
-}
+// Development helper removed for production safety.
+// The /dev/token endpoint was intentionally removed to prevent accidental
+// issuance of tokens in production builds. Use the real authentication flow
+// (POST /login) or re-enable this code only in local development branches.
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Auth API listening on ${PORT}`));

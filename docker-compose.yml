@@ -54,8 +54,8 @@ services:
     ports:
       - "5174:80"
     environment:
-      VITE_AUTH_API: http://auth_api:5000
-      VITE_TRANSIT_API: http://transit_api:5001
+      VITE_AUTH_API: http://192.168.2.66:5000
+      VITE_TRANSIT_API: http://192.168.2.66:5001
     depends_on:
       - auth_api
       - transit_api
