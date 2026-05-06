@@ -37,7 +37,7 @@ ADMIN_USER_CODES=42
 http://localhost:5174
 ```
 
-Click "Get Dev Token" to login (development only).
+Log in with your real user code and password.
 
 ## 📱 Admin UI Features
 
@@ -86,17 +86,14 @@ Click "Get Dev Token" to login (development only).
 ./scripts/deploy.sh clean
 ```
 
-## 🔐 Authentication
+### Authentication
 
-### Development (Local Testing)
-- Click "Get Dev Token" button in login screen
-- Uses hardcoded user ID 42 for testing
+Use the real login flow with user code and password.
 
 ### Production
-- Implement real authentication system
-- Update auth_api with your authentication provider
-- Remove dev token button from code
-- Configure proper admin user codes in ADMIN_USER_CODES
+- Keep `DEV_BYPASS=0` and `DEV_MOCK=0`
+- Configure proper admin user codes in `ADMIN_USER_CODES`
+- Ensure JWTs include the `userCode` claim
 
 ## 📝 Configuration Files
 

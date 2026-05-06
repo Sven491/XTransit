@@ -4,6 +4,7 @@ import { transitClient } from '../api'
 export default function BusLinesManager({ token, user }) {
   const client = transitClient(token)
   const [busLines, setBusLines] = useState([])
+  const [stops, setStops] = useState([])
   const [lineNumber, setLineNumber] = useState('')
   const [startStop, setStartStop] = useState('')
   const [endStop, setEndStop] = useState('')
@@ -21,8 +22,18 @@ export default function BusLinesManager({ token, user }) {
     }
   }
 
+  const loadStops = async () => {
+    try {
+      const res = await client.get('/admin/stops')
+      setStops(res.data.stops || [])
+    } catch (err) {
+      setMessage('Error: ' + (err.response?.data?.error || err.message))
+    }
+  }
+
   useEffect(() => {
     loadBusLines()
+    loadStops()
   }, [])
 
   const createBusLine = async (e) => {
@@ -73,8 +84,18 @@ export default function BusLinesManager({ token, user }) {
         <form onSubmit={createBusLine} className="stack-form">
           <div className="form-row">
             <input placeholder="Line number" value={lineNumber} onChange={e => setLineNumber(e.target.value)} />
-            <input placeholder="Start stop" value={startStop} onChange={e => setStartStop(e.target.value)} />
-            <input placeholder="End stop" value={endStop} onChange={e => setEndStop(e.target.value)} />
+            <select value={startStop} onChange={e => setStartStop(e.target.value)}>
+              <option value="">Start stop</option>
+              {stops.map(stop => (
+                <option key={stop.id} value={stop.name}>#{stop.id} {stop.name}</option>
+              ))}
+            </select>
+            <select value={endStop} onChange={e => setEndStop(e.target.value)}>
+              <option value="">End stop</option>
+              {stops.map(stop => (
+                <option key={stop.id} value={stop.name}>#{stop.id} {stop.name}</option>
+              ))}
+            </select>
           </div>
           <div className="form-row">
             <input placeholder="Duration in minutes" value={estimatedDurationMinutes} onChange={e => setEstimatedDurationMinutes(e.target.value)} />

@@ -564,6 +564,124 @@ app.post('/admin/bus-lines/:busLineId/stops', authMiddleware, adminMiddleware, a
   }
 });
 
+app.post('/admin/bus-lines/:busLineId/stops/reorder', authMiddleware, adminMiddleware, async (req, res) => {
+  const client = await db.pool.connect();
+  try {
+    const { busLineId } = req.params;
+    const { routeStopIds } = req.body || {};
+
+    if (!Array.isArray(routeStopIds) || routeStopIds.length === 0) {
+      return res.status(400).json({ error: 'routeStopIds array required' });
+    }
+
+    const normalizedIds = routeStopIds.map(id => Number(id)).filter(id => Number.isFinite(id));
+    if (normalizedIds.length !== routeStopIds.length) {
+      return res.status(400).json({ error: 'routeStopIds must contain only numeric ids' });
+    }
+
+    if (DEV_MOCK) {
+      const busLineStops = _mock.routeStops
+        .filter(rs => String(rs.busLineId) === String(busLineId))
+        .sort((a, b) => a.stopOrder - b.stopOrder);
+
+      const idSet = new Set(busLineStops.map(rs => Number(rs.id)));
+      const sameCount = busLineStops.length === normalizedIds.length;
+      const sameIds = sameCount && normalizedIds.every(id => idSet.has(id));
+      if (!sameIds) {
+        return res.status(400).json({ error: 'routeStopIds must match current bus line stops' });
+      }
+
+      const updated = normalizedIds.map((routeStopId, index) => {
+        const stop = _mock.routeStops.find(rs => Number(rs.id) === routeStopId && String(rs.busLineId) === String(busLineId));
+        if (!stop) return null;
+        stop.stopOrder = index + 1;
+        stop.updatedAt = new Date().toISOString();
+        return stop;
+      });
+
+      if (updated.some(item => !item)) {
+        return res.status(400).json({ error: 'routeStopIds must match current bus line stops' });
+      }
+
+      _mock.routeStops = _mock.routeStops.map(routeStop => {
+        const reordered = updated.find(item => item.id === routeStop.id);
+        return reordered || routeStop;
+      });
+
+      return res.json({
+        routeStops: updated,
+      });
+    }
+
+    const current = await client.query(
+      `SELECT id FROM transit.route_stops WHERE bus_line_id = $1 ORDER BY stop_order ASC`,
+      [busLineId]
+    );
+
+    const currentIds = current.rows.map(row => Number(row.id));
+    const sameCount = currentIds.length === normalizedIds.length;
+    const sameIds = sameCount && normalizedIds.every(id => currentIds.includes(id));
+
+    if (!sameIds) {
+      return res.status(400).json({ error: 'routeStopIds must match current bus line stops' });
+    }
+
+    await client.query('BEGIN');
+
+    for (let index = 0; index < normalizedIds.length; index += 1) {
+      await client.query(
+        `UPDATE transit.route_stops
+         SET stop_order = $1, updated_at = NOW()
+         WHERE id = $2 AND bus_line_id = $3`,
+        [-(index + 1), normalizedIds[index], busLineId]
+      );
+    }
+
+    for (let index = 0; index < normalizedIds.length; index += 1) {
+      await client.query(
+        `UPDATE transit.route_stops
+         SET stop_order = $1, updated_at = NOW()
+         WHERE id = $2 AND bus_line_id = $3`,
+        [index + 1, normalizedIds[index], busLineId]
+      );
+    }
+
+    const result = await client.query(
+      `SELECT
+         rs.id,
+         rs.stop_order,
+         s.name as stop_name,
+         s.latitude,
+         s.longitude,
+         rs.estimated_arrival_minutes
+       FROM transit.route_stops rs
+       JOIN transit.stops s ON s.id = rs.stop_id
+       WHERE rs.bus_line_id = $1
+       ORDER BY rs.stop_order ASC`,
+      [busLineId]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      routeStops: result.rows.map(row => ({
+        id: row.id,
+        order: row.stop_order,
+        name: row.stop_name,
+        latitude: parseFloat(row.latitude),
+        longitude: parseFloat(row.longitude),
+        estimatedArrivalMinutes: row.estimated_arrival_minutes,
+      })),
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 // ============================================
 // NAVIGATION - Save calculated route
 // ============================================

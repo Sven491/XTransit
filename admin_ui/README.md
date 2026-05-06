@@ -61,8 +61,8 @@ docker build -t xtransit/admin_ui:latest .
 
 ```bash
 docker run -p 5174:80 \
-  -e VITE_AUTH_API=http://localhost:5000 \
-  -e VITE_TRANSIT_API=http://localhost:5001 \
+  -e VITE_AUTH_API=/api/auth \
+  -e VITE_TRANSIT_API=/api/transit \
   xtransit/admin_ui:latest
 ```
 
@@ -86,8 +86,8 @@ http://localhost:5174
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `VITE_AUTH_API` | Auth API URL (internal: http://auth_api:5000) | http://localhost:5000 |
-| `VITE_TRANSIT_API` | Transit API URL (internal: http://transit_api:5001) | http://localhost:5001 |
+| `VITE_AUTH_API` | Auth API URL (same-origin path recommended in Docker) | http://localhost:5000 |
+| `VITE_TRANSIT_API` | Transit API URL (same-origin path recommended in Docker) | http://localhost:5001 |
 
 ### Runtime Configuration
 
@@ -113,7 +113,7 @@ When running in Docker, environment variables are injected at runtime via `docke
 ### API Integration
 
 The app communicates with:
-- **Auth API** (/login, /me, /dev/token)
+- **Auth API** (/login, /me)
 - **Transit API** (/admin/stops, /admin/bus-lines, /admin/fleet/buses)
 
 All requests include JWT Bearer token for authentication.
@@ -122,9 +122,9 @@ All requests include JWT Bearer token for authentication.
 
 ### Login Flow
 
-1. User clicks "Get Dev Token" button (development only)
-2. Client calls POST `/dev/token`
-3. Receives JWT token with userId and userCode
+1. User enters user code and password
+2. Client calls POST `/login`
+3. Receives JWT token with `userId` and `userCode`
 4. JWT is stored in localStorage
 5. All API requests include `Authorization: Bearer <token>`
 
