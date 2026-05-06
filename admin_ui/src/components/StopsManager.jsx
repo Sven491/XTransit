@@ -9,6 +9,7 @@ export default function StopsManager({ token, user }) {
   const [lon, setLon] = useState('')
   const [message, setMessage] = useState(null)
   const [isAdmin] = useState(Boolean(user?.userCode))
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
   const loadStops = async () => {
     try {
@@ -47,6 +48,19 @@ export default function StopsManager({ token, user }) {
     }
   }
 
+  const deleteStop = async (stopId, stopName) => {
+    setMessage(null)
+    try {
+      await client.delete(`/admin/stops/${stopId}`)
+      setMessage(`Halte "${stopName}" verwijderd`)
+      setDeleteConfirm(null)
+      await loadStops()
+    } catch (err) {
+      const errMsg = err.response?.data?.error || err.message
+      setMessage('Error: ' + errMsg)
+    }
+  }
+
   return (
     <section className="card">
       <div className="section-header">
@@ -61,6 +75,15 @@ export default function StopsManager({ token, user }) {
           <article className="mini-card" key={stop.id}>
             <strong>#{stop.id} {stop.name}</strong>
             <div>{stop.latitude}, {stop.longitude}</div>
+            {isAdmin && (
+              <button 
+                className="danger" 
+                onClick={() => setDeleteConfirm(stop)}
+                style={{ marginTop: '0.5rem', width: '100%' }}
+              >
+                Delete
+              </button>
+            )}
           </article>
         ))}
       </div>
@@ -78,7 +101,43 @@ export default function StopsManager({ token, user }) {
       )}
       
       {message && <div className="message">{message}</div>}
-      <p>Note: To view stops per line, use the Bus Line Stops tool below.</p>
+
+      {deleteConfirm && (
+        <div style={overlay}>
+          <div style={modal}>
+            <h3>Delete Stop?</h3>
+            <p><strong>{deleteConfirm.name}</strong></p>
+            <p style={{ color: '#999', fontSize: '0.9rem' }}>This cannot be undone.</p>
+            <div className="form-row" style={{ marginTop: '1rem' }}>
+              <button className="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button className="danger" onClick={() => deleteStop(deleteConfirm.id, deleteConfirm.name)}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
+}
+
+const overlay = {
+  position: 'fixed',
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  backgroundColor: 'rgba(0,0,0,0.5)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1000,
+}
+
+const modal = {
+  backgroundColor: '#fff',
+  padding: '2rem',
+  borderRadius: '8px',
+  maxWidth: '400px',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
 }

@@ -138,6 +138,17 @@ button.secondary {
 	color: #0f172a;
 }
 
+button.danger {
+	background: #dc2626;
+	color: white;
+	border-color: #991b1b;
+}
+
+button.danger:hover {
+	background: #b91c1c;
+	box-shadow: 0 10px 24px rgba(220, 38, 38, 0.2);
+}
+
 .message {
 	margin-top: 10px;
 	color: #047857;
@@ -254,3 +265,112 @@ button.secondary {
 	max-width: 540px;
 	margin: 60px auto;
 }
+
+/* ============ Timetable Styles ============ */
+.timetable-container {
+	overflow-x: auto;
+	margin: 20px 0;
+	border: 1px solid rgba(148, 163, 184, 0.25);
+	border-radius: 12px;
+	background: white;
+}
+
+.timetable {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.95rem;
+}
+
+.timetable thead {
+	background: #f1f5f9;
+	border-bottom: 2px solid rgba(148, 163, 184, 0.3);
+}
+
+.timetable th {
+	padding: 12px;
+	text-align: left;
+	font-weight: 600;
+	color: #0f172a;
+}
+
+.timetable td {
+	padding: 12px;
+	border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.timetable tbody tr:hover {
+	background: rgba(99, 102, 241, 0.03);
+}
+
+.time-cell {
+	font-weight: 600;
+	color: #4f46e5;
+	width: 140px;
+	white-space: nowrap;
+	background: #f8fafc;
+}
+
+.schedule-cell {
+	background: white;
+}
+
+.schedule-items {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	min-height: 60px;
+	align-content: flex-start;
+}
+
+.schedule-card {
+	background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(14, 165, 233, 0.06));
+	border: 1px solid rgba(99, 102, 241, 0.25);
+	border-radius: 8px;
+	padding: 10px;
+	flex: 0 1 auto;
+	min-width: 180px;
+	cursor: grab;
+	transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.schedule-card:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 8px 16px rgba(99, 102, 241, 0.15);
+}
+
+.schedule-card:active {
+	cursor: grabbing;
+}
+
+.schedule-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 6px;
+}
+
+.schedule-header strong {
+	color: #4f46e5;
+	font-size: 0.95rem;
+}
+
+.schedule-time {
+	font-size: 0.85rem;
+	color: #64748b;
+	background: rgba(255, 255, 255, 0.5);
+	padding: 2px 6px;
+	border-radius: 4px;
+}
+
+.schedule-details {
+	font-size: 0.85rem;
+	color: #475569;
+}
+
+.schedule-plate {
+	color: #94a3b8;
+	font-size: 0.8rem;
+	font-family: monospace;
+	margin-top: 2px;
+}
+

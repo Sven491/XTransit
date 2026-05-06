@@ -16,10 +16,12 @@ const _mock = {
   routeStops: [],
   busLines: [],
   fleetBuses: [],
+  schedules: [],
   nextStopId: 1,
   nextRouteStopId: 1,
   nextBusLineId: 1,
   nextFleetBusId: 1,
+  nextScheduleId: 1,
 };
 
 const adminUserCodes = new Set(
@@ -683,6 +685,161 @@ app.post('/admin/bus-lines/:busLineId/stops/reorder', authMiddleware, adminMiddl
 });
 
 // ============================================
+// ADMIN - Delete a stop
+// ============================================
+app.delete('/admin/stops/:stopId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { stopId } = req.params;
+
+    if (!stopId || !Number.isFinite(Number(stopId))) {
+      return res.status(400).json({ error: 'invalid_stop_id' });
+    }
+
+    if (DEV_MOCK) {
+      const index = _mock.stops.findIndex(s => Number(s.id) === Number(stopId));
+      if (index === -1) {
+        return res.status(404).json({ error: 'stop_not_found' });
+      }
+      const deletedStop = _mock.stops.splice(index, 1)[0];
+      return res.json({ success: true, stop: deletedStop });
+    }
+
+    const result = await db.query(
+      `DELETE FROM transit.stops WHERE id = $1 RETURNING id, name`,
+      [stopId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'stop_not_found' });
+    }
+
+    res.json({ success: true, stop: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    if (err.code === '23503') {
+      return res.status(409).json({ error: 'foreign_key_violation', message: 'This stop is referenced by route_stops' });
+    }
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Delete a bus line
+// ============================================
+app.delete('/admin/bus-lines/:busLineId', authMiddleware, adminMiddleware, async (req, res) => {
+  const client = await db.pool.connect();
+  try {
+    const { busLineId } = req.params;
+
+    if (!busLineId || !Number.isFinite(Number(busLineId))) {
+      return res.status(400).json({ error: 'invalid_bus_line_id' });
+    }
+
+    if (DEV_MOCK) {
+      const lineIndex = _mock.busLines.findIndex(bl => Number(bl.id) === Number(busLineId));
+      if (lineIndex === -1) {
+        return res.status(404).json({ error: 'bus_line_not_found' });
+      }
+      const deletedLine = _mock.busLines.splice(lineIndex, 1)[0];
+      // Also delete route_stops for this line
+      _mock.routeStops = _mock.routeStops.filter(rs => String(rs.busLineId) !== String(busLineId));
+      return res.json({ success: true, busLine: deletedLine });
+    }
+
+    await client.query('BEGIN');
+
+    // Delete associated route_stops first
+    await client.query(
+      `DELETE FROM transit.route_stops WHERE bus_line_id = $1`,
+      [busLineId]
+    );
+
+    // Delete the bus line
+    const result = await client.query(
+      `DELETE FROM transit.bus_lines WHERE id = $1 RETURNING id, line_number`,
+      [busLineId]
+    );
+
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'bus_line_not_found' });
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, busLine: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================
+// ADMIN - Delete a route_stop from bus line
+// ============================================
+app.delete('/admin/bus-lines/:busLineId/stops/:routeStopId', authMiddleware, adminMiddleware, async (req, res) => {
+  const client = await db.pool.connect();
+  try {
+    const { busLineId, routeStopId } = req.params;
+
+    if (!busLineId || !Number.isFinite(Number(busLineId))) {
+      return res.status(400).json({ error: 'invalid_bus_line_id' });
+    }
+
+    if (!routeStopId || !Number.isFinite(Number(routeStopId))) {
+      return res.status(400).json({ error: 'invalid_route_stop_id' });
+    }
+
+    if (DEV_MOCK) {
+      const index = _mock.routeStops.findIndex(
+        rs => Number(rs.id) === Number(routeStopId) && String(rs.busLineId) === String(busLineId)
+      );
+      if (index === -1) {
+        return res.status(404).json({ error: 'route_stop_not_found' });
+      }
+      const deletedRouteStop = _mock.routeStops.splice(index, 1)[0];
+      return res.json({ success: true, routeStop: deletedRouteStop });
+    }
+
+    await client.query('BEGIN');
+
+    // Find and delete the route_stop
+    const result = await client.query(
+      `DELETE FROM transit.route_stops 
+       WHERE id = $1 AND bus_line_id = $2
+       RETURNING id, stop_order`,
+      [routeStopId, busLineId]
+    );
+
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'route_stop_not_found' });
+    }
+
+    const deletedOrder = result.rows[0].stop_order;
+
+    // Re-order remaining stops
+    await client.query(
+      `UPDATE transit.route_stops
+       SET stop_order = stop_order - 1, updated_at = NOW()
+       WHERE bus_line_id = $1 AND stop_order > $2`,
+      [busLineId, deletedOrder]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, routeStop: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================
 // NAVIGATION - Save calculated route
 // ============================================
 app.post('/navigation/route', authMiddleware, async (req, res) => {
@@ -833,6 +990,320 @@ app.patch('/routes/:routeId/status', authMiddleware, async (req, res) => {
     }
 
     res.json({ route: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Manage schedules (timetable)
+// ============================================
+app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (DEV_MOCK) {
+      return res.json({ schedules: _mock.schedules || [] });
+    }
+
+    const result = await db.query(`
+      SELECT 
+        s.id,
+        s.bus_line_id,
+        s.bus_id,
+        s.driver_id,
+        s.start_time,
+        s.end_time,
+        s.status,
+        s.created_at,
+        bl.line_number,
+        b.name as bus_name,
+        b.license_plate
+      FROM transit.schedules s
+      LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+      LEFT JOIN fleet.bus b ON s.bus_id = b.id
+      ORDER BY s.start_time DESC
+    `);
+
+    res.json({
+      schedules: result.rows.map(row => ({
+        id: row.id,
+        busLineId: row.bus_line_id,
+        busId: row.bus_id,
+        driverId: row.driver_id,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        status: row.status,
+        lineNumber: row.line_number,
+        busName: row.bus_name,
+        licensePlate: row.license_plate,
+        createdAt: row.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.post('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { busLineId, busId, driverId, startTime, endTime } = req.body;
+
+    if (!busLineId || !busId || !startTime || !endTime) {
+      return res.status(400).json({ error: 'missing_required_fields' });
+    }
+
+    if (DEV_MOCK) {
+      if (!_mock.schedules) _mock.schedules = [];
+      const schedule = {
+        id: (_mock.nextScheduleId || 1),
+        busLineId,
+        busId,
+        driverId: driverId || null,
+        startTime,
+        endTime,
+        status: 'planned',
+        createdAt: new Date().toISOString(),
+      };
+      _mock.nextScheduleId = ((_mock.nextScheduleId || 1) + 1);
+      _mock.schedules.push(schedule);
+      return res.status(201).json({ schedule });
+    }
+
+    const result = await db.query(`
+      WITH next_id AS (
+        SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules
+      )
+      INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status)
+      SELECT next_id.id, $1, $2, $3, $4, $5, 'planned'
+      FROM next_id
+      RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, created_at
+    `, [busLineId, busId, driverId || null, startTime, endTime]);
+
+    const schedule = result.rows[0];
+    res.status(201).json({
+      schedule: {
+        id: schedule.id,
+        busLineId: schedule.bus_line_id,
+        busId: schedule.bus_id,
+        driverId: schedule.driver_id,
+        startTime: schedule.start_time,
+        endTime: schedule.end_time,
+        status: schedule.status,
+        createdAt: schedule.created_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.delete('/admin/schedules/:scheduleId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+
+    if (!scheduleId || !Number.isFinite(Number(scheduleId))) {
+      return res.status(400).json({ error: 'invalid_schedule_id' });
+    }
+
+    if (DEV_MOCK) {
+      if (!_mock.schedules) _mock.schedules = [];
+      const index = _mock.schedules.findIndex(s => Number(s.id) === Number(scheduleId));
+      if (index === -1) {
+        return res.status(404).json({ error: 'schedule_not_found' });
+      }
+      const deleted = _mock.schedules.splice(index, 1)[0];
+      return res.json({ success: true, schedule: deleted });
+    }
+
+    const result = await db.query(
+      `DELETE FROM transit.schedules WHERE id = $1 RETURNING id`,
+      [scheduleId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    res.json({ success: true, schedule: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// PUBLIC - Get schedules (for public timetable)
+// ============================================
+app.get('/schedules', async (req, res) => {
+  try {
+    const { date, lineId } = req.query;
+
+    if (DEV_MOCK) {
+      return res.json({ schedules: _mock.schedules || [] });
+    }
+
+    let query = `
+      SELECT 
+        s.id,
+        s.bus_line_id,
+        s.bus_id,
+        s.start_time,
+        s.end_time,
+        s.status,
+        bl.line_number,
+        b.name as bus_name
+      FROM transit.schedules s
+      LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+      LEFT JOIN fleet.bus b ON s.bus_id = b.id
+      WHERE s.status IN ('planned', 'active')
+    `;
+
+    const params = [];
+
+    if (date) {
+      query += ` AND DATE(s.start_time) = $${params.length + 1}`;
+      params.push(date);
+    }
+
+    if (lineId) {
+      query += ` AND s.bus_line_id = $${params.length + 1}`;
+      params.push(lineId);
+    }
+
+    query += ` ORDER BY s.start_time ASC`;
+
+    const result = await db.query(query, params);
+
+    res.json({
+      schedules: result.rows.map(row => ({
+        id: row.id,
+        busLineId: row.bus_line_id,
+        busId: row.bus_id,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        status: row.status,
+        lineNumber: row.line_number,
+        busName: row.bus_name,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.get('/schedules/:scheduleId', async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+
+    if (DEV_MOCK) {
+      const schedule = (_mock.schedules || []).find(s => Number(s.id) === Number(scheduleId));
+      if (!schedule) {
+        return res.status(404).json({ error: 'schedule_not_found' });
+      }
+      return res.json({ schedule });
+    }
+
+    const result = await db.query(`
+      SELECT 
+        s.id,
+        s.bus_line_id,
+        s.bus_id,
+        s.start_time,
+        s.end_time,
+        s.status,
+        bl.line_number,
+        bl.start_stop,
+        bl.end_stop,
+        b.name as bus_name,
+        b.license_plate
+      FROM transit.schedules s
+      LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+      LEFT JOIN fleet.bus b ON s.bus_id = b.id
+      WHERE s.id = $1
+    `, [scheduleId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    const row = result.rows[0];
+    res.json({
+      schedule: {
+        id: row.id,
+        busLineId: row.bus_line_id,
+        busId: row.bus_id,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        status: row.status,
+        lineNumber: row.line_number,
+        startStop: row.start_stop,
+        endStop: row.end_stop,
+        busName: row.bus_name,
+        licensePlate: row.license_plate,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// PUBLIC - Get stops for a schedule's line
+// ============================================
+app.get('/schedules/:scheduleId/stops', async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+
+    if (DEV_MOCK) {
+      const schedule = (_mock.schedules || []).find(s => Number(s.id) === Number(scheduleId));
+      if (!schedule) {
+        return res.status(404).json({ error: 'schedule_not_found' });
+      }
+      const routeStops = (_mock.routeStops || [])
+        .filter(rs => Number(rs.busLineId) === Number(schedule.busLineId))
+        .sort((a, b) => a.stopOrder - b.stopOrder);
+      return res.json({ stops: routeStops });
+    }
+
+    const scheduleResult = await db.query(
+      `SELECT bus_line_id FROM transit.schedules WHERE id = $1`,
+      [scheduleId]
+    );
+
+    if (scheduleResult.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    const busLineId = scheduleResult.rows[0].bus_line_id;
+
+    const stopsResult = await db.query(`
+      SELECT 
+        rs.id,
+        rs.stop_order,
+        s.name,
+        s.latitude,
+        s.longitude,
+        rs.estimated_arrival_minutes
+      FROM transit.route_stops rs
+      JOIN transit.stops s ON s.id = rs.stop_id
+      WHERE rs.bus_line_id = $1
+      ORDER BY rs.stop_order ASC
+    `, [busLineId]);
+
+    res.json({
+      stops: stopsResult.rows.map(row => ({
+        id: row.id,
+        order: row.stop_order,
+        name: row.name,
+        latitude: parseFloat(row.latitude),
+        longitude: parseFloat(row.longitude),
+        estimatedArrivalMinutes: row.estimated_arrival_minutes,
+      })),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal_error', details: err.message });

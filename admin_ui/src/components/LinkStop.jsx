@@ -11,6 +11,7 @@ export default function LinkStop({ token, user }) {
   const [message, setMessage] = useState(null)
   const [stops, setStops] = useState([])
   const [draggedItem, setDraggedItem] = useState(null)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
   const isAdmin = Boolean(user?.userCode)
 
@@ -145,6 +146,19 @@ export default function LinkStop({ token, user }) {
     }
   }
 
+  const deleteRouteStop = async (routeStopId, stopName) => {
+    setMessage(null)
+    try {
+      await client.delete(`/admin/bus-lines/${busLineId}/stops/${routeStopId}`)
+      setMessage(`Halte "${stopName}" verwijderd uit de lijn`)
+      setDeleteConfirm(null)
+      await loadStopsForLine()
+    } catch (err) {
+      const errMsg = err.response?.data?.error || err.message
+      setMessage('Error: ' + errMsg)
+    }
+  }
+
   return (
     <section className="card">
       <div className="section-header">
@@ -215,6 +229,9 @@ export default function LinkStop({ token, user }) {
             <div className="route-stop-actions">
               <button type="button" className="secondary" onClick={() => moveStop(index, -1)} disabled={index === 0}>↑</button>
               <button type="button" className="secondary" onClick={() => moveStop(index, 1)} disabled={index === stops.length - 1}>↓</button>
+              {isAdmin && (
+                <button type="button" className="danger" onClick={() => setDeleteConfirm({ id: s.id, name: s.name })}>✕</button>
+              )}
             </div>
           </article>
         ))}
@@ -268,6 +285,43 @@ export default function LinkStop({ token, user }) {
         <div>You must be admin to link stops.</div>
       )}
       {message && <div className="message">{message}</div>}
+
+      {deleteConfirm && (
+        <div style={overlay}>
+          <div style={modal}>
+            <h3>Remove Stop from Line?</h3>
+            <p><strong>{deleteConfirm.name}</strong></p>
+            <p style={{ color: '#999', fontSize: '0.9rem' }}>This will remove the stop from the route and re-order the remaining stops.</p>
+            <div className="form-row" style={{ marginTop: '1rem' }}>
+              <button className="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button className="danger" onClick={() => deleteRouteStop(deleteConfirm.id, deleteConfirm.name)}>
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
+}
+
+const overlay = {
+  position: 'fixed',
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  backgroundColor: 'rgba(0,0,0,0.5)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1000,
+}
+
+const modal = {
+  backgroundColor: '#fff',
+  padding: '2rem',
+  borderRadius: '8px',
+  maxWidth: '400px',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
 }

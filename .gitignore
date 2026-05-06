@@ -10,8 +10,25 @@ admin_ui/dist/
 ADMIN_DEPLOYMENT_SUMMARY.md
 CI_CD_PORTAINER_GUIDE.md
 DEPLOYMENT.md
+GETTING_STARTED.md
+INTERNAL_*.md
+SETUP_*.md
+DEPLOY_*.md
+
+# Custom instruction files (private)
+.instructions.md
+.prompt.md
+.agent.md
+SKILL.md
+copilot-instructions.md
+AGENTS.md
+
+# Private scripts
+scripts/private/
+scripts/*.local.*
+scripts/.env
 
 # Runtime files
 *.log
 *.sqlite3
-\
+.DS_Store

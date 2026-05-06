@@ -12,6 +12,24 @@ Belangrijk: deze README bevat geen wachtwoorden of andere gevoelige gegevens. Sl
 
 ---
 
+## Security & Private Files
+
+**⚠️ Important:** This repository excludes private documentation and setup instructions from Git and Docker builds. See [SECURITY_PRIVATE_FILES.md](SECURITY_PRIVATE_FILES.md) for details on:
+
+- What files are kept private and why
+- How `.gitignore` and `.dockerignore` protect sensitive information
+- Best practices for handling deployment documentation
+- Guidelines for adding new private files
+
+**Private files are excluded** (not in git/docker):
+- `GETTING_STARTED.md` - Internal setup guide
+- `ADMIN_DEPLOYMENT_SUMMARY.md` - Deployment status
+- `CI_CD_PORTAINER_GUIDE.md` - Infrastructure docs
+- `DEPLOYMENT.md` - Deployment procedures
+- Custom instruction files (`.instructions.md`, etc.)
+
+---
+
 ## Overzicht van inhoud
 
 - `auth_api/` — source voor auth service
@@ -233,6 +251,116 @@ Maar voor je production/Portainer setup volg je je bestaande beheersbeleid en ge
 - CI workflow: `.github/workflows/docker-build.yml`
 - Extra docs: `DOCKER_README.md`, `CI_CD_PORTAINER_GUIDE.md`
 
+---
+
+## Admin Control Center
+
+The project includes a **modern React admin dashboard** for fleet and schedule management.
+
+### Features
+
+- **Fleet Management**: Create and manage buses with seat capacity and license plates
+- **Transit Lines**: Define bus routes with start/end stops and duration
+- **Route Management**: Link stops to bus lines with drag-and-drop reordering
+- **Schedule Maker**: Create schedules by assigning vehicles and crew to bus lines with time slots
+- **Timetable View**: 24-hour timetable showing scheduled services
+- **Delete Operations**: Remove stops, lines, and schedules with confirmation modals
+
+### Admin UI Location
+
+```
+admin_ui/
+├── src/
+│   ├── components/
+│   │   ├── StopsManager.jsx      # Create and manage transit stops
+│   │   ├── BusLinesManager.jsx   # Manage bus lines and routes
+│   │   ├── FleetManager.jsx      # Manage fleet vehicles
+│   │   ├── LinkStop.jsx          # Drag-drop route stop assignment
+│   │   ├── ScheduleMaker.jsx     # Create and manage schedules
+│   │   ├── TimetableViewer.jsx   # Public timetable (reusable)
+│   │   └── Login.jsx             # Admin authentication
+│   ├── App.jsx                   # Main app component
+│   ├── api.js                    # API client with runtime config
+│   └── styles.css                # Responsive UI styling
+├── docker-entrypoint.sh          # Runtime env config
+└── Dockerfile                    # Multi-stage build
+
+```
+
+### Building the Admin UI
+
+```bash
+cd admin_ui
+npm install
+npm run build         # Production build
+npm run dev          # Development (Vite)
+```
+
+### Docker Deployment
+
+The admin UI is included in `docker-compose.yml` as service `admin_ui` on port 5174.
+
+```bash
+docker-compose up admin_ui
+# Access at http://localhost:5174
+```
+
+### Public Schedule API
+
+The Transit API exposes public (unauthenticated) schedule endpoints:
+
+**Endpoints:**
+- `GET /schedules?date=YYYY-MM-DD&lineId=ID` — Get schedules for a date/line
+- `GET /schedules/:scheduleId` — Get schedule details
+- `GET /schedules/:scheduleId/stops` — Get stops on a schedule's line
+
+**Example:**
+```bash
+curl http://localhost:5001/schedules?date=2026-05-06
+```
+
+**TimetableViewer Component:**
+```jsx
+import TimetableViewer from './components/TimetableViewer'
+
+<TimetableViewer apiBaseUrl="http://api.transit.local:5001" />
+```
+
+### Schedule Maker Documentation
+
+See [admin_ui/SCHEDULE_API.md](admin_ui/SCHEDULE_API.md) for detailed API documentation, usage examples, and UI features.
+
+---
+
+## Authentication
+
+Admin dashboard uses simple JWT-based authentication:
+
+1. **Login** with user code (e.g., `42`)
+2. Receive JWT token from `auth_api`
+3. Use token for admin operations (`/admin/*` endpoints)
+
+Admin authorization is controlled by `ADMIN_USER_CODES` environment variable:
+
+```bash
+ADMIN_USER_CODES=42,101,205  # Comma-separated admin user codes
+```
+
+---
+
+## Development vs Production
+
+### Development Mode
+
+Use `DEV_MOCK=1` to work without a database (in-memory mock storage):
+
+```bash
+ADMIN_USER_CODES=42 DEV_MOCK=1 JWT_SECRET=devsecret npm --prefix ./transit_api start
+```
+
+### Production Mode
+
+Set up real PostgreSQL database and provide credentials via environment variables.
 
 ---
 

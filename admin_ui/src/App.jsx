@@ -4,6 +4,7 @@ import StopsManager from './components/StopsManager'
 import LinkStop from './components/LinkStop'
 import BusLinesManager from './components/BusLinesManager'
 import FleetManager from './components/FleetManager'
+import ScheduleMaker from './components/ScheduleMaker'
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token'))
@@ -44,6 +45,7 @@ export default function App() {
         <BusLinesManager token={token} user={user} />
         <FleetManager token={token} user={user} />
         <LinkStop token={token} user={user} />
+        <ScheduleMaker token={token} user={user} />
       </main>
     </div>
   )

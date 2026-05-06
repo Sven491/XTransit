@@ -1,0 +1,47 @@
+# Root level sensitive docs - NEVER include
+/ADMIN_DEPLOYMENT_SUMMARY.md
+/CI_CD_PORTAINER_GUIDE.md
+/DEPLOYMENT.md
+/GETTING_STARTED.md
+/INTERNAL_*.md
+/SETUP_*.md
+/DEPLOY_*.md
+
+# Custom instruction files (private)
+/.instructions.md
+/.prompt.md
+/.agent.md
+/SKILL.md
+/copilot-instructions.md
+/AGENTS.md
+
+# Private scripts and configs
+/scripts/
+
+# Node modules and logs
+node_modules
+npm-debug.log
+
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Development files
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+.env
+.local
+
+# Build files
+build/
+coverage/
+.nyc_output/
+
+# Frontend specific
+.turbo
+.next
+out/

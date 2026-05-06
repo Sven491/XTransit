@@ -12,6 +12,7 @@ export default function BusLinesManager({ token, user }) {
   const [description, setDescription] = useState('')
   const [message, setMessage] = useState(null)
   const [isAdmin] = useState(Boolean(user?.userCode))
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
   const loadBusLines = async () => {
     try {
@@ -59,6 +60,19 @@ export default function BusLinesManager({ token, user }) {
     }
   }
 
+  const deleteBusLine = async (lineId, lineNumber) => {
+    setMessage(null)
+    try {
+      await client.delete(`/admin/bus-lines/${lineId}`)
+      setMessage(`Buslijn ${lineNumber} verwijderd`)
+      setDeleteConfirm(null)
+      await loadBusLines()
+    } catch (err) {
+      const errMsg = err.response?.data?.error || err.message
+      setMessage('Error: ' + errMsg)
+    }
+  }
+
   return (
     <section className="card">
       <div className="section-header">
@@ -76,6 +90,15 @@ export default function BusLinesManager({ token, user }) {
             <div>{line.startStop} → {line.endStop}</div>
             <div>{line.estimatedDurationMinutes} min</div>
             {line.description ? <div className="muted">{line.description}</div> : null}
+            {isAdmin && (
+              <button 
+                className="danger" 
+                onClick={() => setDeleteConfirm(line)}
+                style={{ marginTop: '0.5rem', width: '100%' }}
+              >
+                Delete
+              </button>
+            )}
           </article>
         ))}
       </div>
@@ -106,6 +129,43 @@ export default function BusLinesManager({ token, user }) {
       ) : <div>You must be admin to create bus lines.</div>}
 
       {message && <div className="message">{message}</div>}
+
+      {deleteConfirm && (
+        <div style={overlay}>
+          <div style={modal}>
+            <h3>Delete Bus Line?</h3>
+            <p><strong>Lijn {deleteConfirm.lineNumber}</strong> ({deleteConfirm.startStop} → {deleteConfirm.endStop})</p>
+            <p style={{ color: '#999', fontSize: '0.9rem' }}>This will also delete all stops on this line. Cannot be undone.</p>
+            <div className="form-row" style={{ marginTop: '1rem' }}>
+              <button className="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button className="danger" onClick={() => deleteBusLine(deleteConfirm.id, deleteConfirm.lineNumber)}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
+}
+
+const overlay = {
+  position: 'fixed',
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  backgroundColor: 'rgba(0,0,0,0.5)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1000,
+}
+
+const modal = {
+  backgroundColor: '#fff',
+  padding: '2rem',
+  borderRadius: '8px',
+  maxWidth: '400px',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
 }
