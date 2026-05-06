@@ -1586,7 +1586,20 @@ app.get('/schedules/:scheduleId/stops', async (req, res) => {
       const routeStops = (_mock.routeStops || [])
         .filter(rs => Number(rs.busLineId) === Number(schedule.busLineId))
         .sort((a, b) => a.stopOrder - b.stopOrder);
-      return res.json({ stops: routeStops });
+      
+      // Map to match database response format
+      const formattedStops = routeStops.map(rs => {
+        const stop = (_mock.stops || []).find(s => Number(s.id) === Number(rs.stopId));
+        return {
+          id: rs.id,
+          order: rs.stopOrder,
+          name: stop?.name || rs.name || 'Unknown Stop',
+          latitude: stop?.latitude ?? rs.latitude ?? 0,
+          longitude: stop?.longitude ?? rs.longitude ?? 0,
+          estimatedArrivalMinutes: rs.estimatedArrivalMinutes || 0,
+        };
+      });
+      return res.json({ stops: formattedStops });
     }
 
     const scheduleResult = await db.query(
