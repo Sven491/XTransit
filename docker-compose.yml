@@ -54,8 +54,8 @@ services:
     ports:
       - "5174:80"
     environment:
-      VITE_AUTH_API: /api/auth
-      VITE_TRANSIT_API: /api/transit
+      AUTH_API: ${AUTH_API}
+      TRANSIT_API: ${TRANSIT_API}
     depends_on:
       - auth_api
       - transit_api
