@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Bus Line model
 class BusLine {
   final int id;
@@ -139,4 +141,82 @@ class DailySchedule {
       'date': date.toIso8601String(),
     };
   }
+}
+
+/// Stop model for the new schedule system.
+class ScheduleStop {
+  final int id;
+  final int order;
+  final String name;
+  final double latitude;
+  final double longitude;
+  final int estimatedArrivalMinutes;
+
+  ScheduleStop({
+    required this.id,
+    required this.order,
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+    required this.estimatedArrivalMinutes,
+  });
+
+  factory ScheduleStop.fromJson(Map<String, dynamic> json) {
+    return ScheduleStop(
+      id: (json['id'] as num).toInt(),
+      order: (json['order'] as num).toInt(),
+      name: (json['name'] ?? json['stopName'] ?? '') as String,
+      latitude: (json['latitude'] as num).toDouble(),
+      longitude: (json['longitude'] as num).toDouble(),
+      estimatedArrivalMinutes: (json['estimatedArrivalMinutes'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// Schedule model for the new public schedule API.
+class ServiceSchedule {
+  final int id;
+  final int busLineId;
+  final int busId;
+  final DateTime startTime;
+  final DateTime endTime;
+  final String status;
+  final int lineNumber;
+  final String busName;
+  final List<int> weekdays;
+
+  ServiceSchedule({
+    required this.id,
+    required this.busLineId,
+    required this.busId,
+    required this.startTime,
+    required this.endTime,
+    required this.status,
+    required this.lineNumber,
+    required this.busName,
+    required this.weekdays,
+  });
+
+  factory ServiceSchedule.fromJson(Map<String, dynamic> json) {
+    final rawWeekdays = json['weekdays'];
+    final weekdays = rawWeekdays is List
+        ? rawWeekdays.map((day) => (day as num).toInt()).toList()
+        : rawWeekdays is String
+            ? (jsonDecode(rawWeekdays) as List).map((day) => (day as num).toInt()).toList()
+            : <int>[];
+
+    return ServiceSchedule(
+      id: (json['id'] as num).toInt(),
+      busLineId: (json['busLineId'] as num).toInt(),
+      busId: (json['busId'] as num).toInt(),
+      startTime: DateTime.parse(json['startTime'] as String),
+      endTime: DateTime.parse(json['endTime'] as String),
+      status: (json['status'] ?? 'planned') as String,
+      lineNumber: (json['lineNumber'] as num).toInt(),
+      busName: (json['busName'] ?? '') as String,
+      weekdays: weekdays,
+    );
+  }
+
+  bool get isRecurring => weekdays.isNotEmpty;
 }

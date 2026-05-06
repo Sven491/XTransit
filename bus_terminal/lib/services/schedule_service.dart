@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import '../models/schedule.dart';
 import '../models/navigation.dart';
 import 'auth_service.dart';
+import 'exceptions.dart';
 
 /// Schedule/Route Service
 class ScheduleService {
@@ -10,6 +11,51 @@ class ScheduleService {
   // Transit API runs on port 5001
   static const String _apiBaseUrl = 'http://192.168.2.66:5001';
   final _authService = AuthService();
+
+  /// Get public schedules for a specific date.
+  Future<List<ServiceSchedule>> getSchedules(DateTime date, {int? lineId}) async {
+    try {
+      final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      final queryParameters = <String, String>{'date': dateStr};
+      if (lineId != null) {
+        queryParameters['lineId'] = lineId.toString();
+      }
+
+      final uri = Uri.parse('$_apiBaseUrl/schedules').replace(queryParameters: queryParameters);
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return (data['schedules'] as List? ?? [])
+            .map((schedule) => schedule as Map<String, dynamic>)
+            .map(ServiceSchedule.fromJson)
+            .toList();
+      }
+
+      throw Exception('Failed to load schedules: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('Schedule error: $e');
+    }
+  }
+
+  /// Get stop list for a specific schedule.
+  Future<List<ScheduleStop>> getScheduleStops(int scheduleId) async {
+    try {
+      final response = await http.get(Uri.parse('$_apiBaseUrl/schedules/$scheduleId/stops'));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return (data['stops'] as List? ?? [])
+            .map((stop) => stop as Map<String, dynamic>)
+            .map(ScheduleStop.fromJson)
+            .toList();
+      }
+
+      throw Exception('Failed to load schedule stops: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('Schedule stops error: $e');
+    }
+  }
 
   /// Get daily schedule for a specific date
   Future<DailySchedule> getDailySchedule(DateTime date) async {
@@ -25,12 +71,14 @@ class ScheduleService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return DailySchedule.fromJson(data);
-      } else if (response.statusCode == 401) {
-        throw Exception('Unauthorized - Please login again');
+      } else if (response.statusCode == 401 || response.statusCode == 403) {
+        await _authService.logout();
+        throw UnauthorizedException('Session expired - Please login again');
       } else {
         throw Exception('Failed to load schedule: ${response.statusCode}');
       }
     } catch (e) {
+      if (e is UnauthorizedException) rethrow;
       throw Exception('Schedule error: $e');
     }
   }
@@ -54,12 +102,14 @@ class ScheduleService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return Route.fromJson(data);
-      } else if (response.statusCode == 401) {
-        throw Exception('Unauthorized - Please login again');
+      } else if (response.statusCode == 401 || response.statusCode == 403) {
+        await _authService.logout();
+        throw UnauthorizedException('Session expired - Please login again');
       } else {
         throw Exception('Failed to load route: ${response.statusCode}');
       }
     } catch (e) {
+      if (e is UnauthorizedException) rethrow;
       throw Exception('Route error: $e');
     }
   }
@@ -76,10 +126,14 @@ class ScheduleService {
         body: jsonEncode({'status': status}),
       );
 
-      if (response.statusCode != 200) {
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        await _authService.logout();
+        throw UnauthorizedException('Session expired - Please login again');
+      } else if (response.statusCode != 200) {
         throw Exception('Failed to update status: ${response.statusCode}');
       }
     } catch (e) {
+      if (e is UnauthorizedException) rethrow;
       throw Exception('Status update error: $e');
     }
   }
@@ -112,12 +166,14 @@ class ScheduleService {
                 .whereType<NavigationPoint>()
                 .toList() ?? [];
         return stops;
-      } else if (response.statusCode == 401) {
-        throw Exception('Unauthorized - Please login again');
+      } else if (response.statusCode == 401 || response.statusCode == 403) {
+        await _authService.logout();
+        throw UnauthorizedException('Session expired - Please login again');
       } else {
         throw Exception('Failed to load stops: ${response.statusCode}');
       }
     } catch (e) {
+      if (e is UnauthorizedException) rethrow;
       throw Exception('Get stops error: $e');
     }
   }

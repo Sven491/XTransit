@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
-import 'screens/daily_schedule_screen.dart';
+import 'screens/schedule_overview_screen.dart';
+import 'services/auth_service.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -19,9 +20,33 @@ class MainApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       routes: {
         '/login': (context) => const LoginScreen(),
-        '/schedule': (context) => const DailyScheduleScreen(),
+        '/schedule': (context) => const ScheduleOverviewScreen(),
       },
-      home: const LoginScreen(),
+      home: const _InitialRoute(),
+    );
+  }
+}
+
+/// Initial route checks if user is logged in
+class _InitialRoute extends StatelessWidget {
+  const _InitialRoute();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: AuthService().isLoggedIn(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        
+        // If logged in, go to schedule; otherwise go to login
+        return snapshot.data == true 
+            ? const ScheduleOverviewScreen() 
+            : const LoginScreen();
+      },
     );
   }
 }

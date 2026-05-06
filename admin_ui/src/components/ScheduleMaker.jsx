@@ -1,22 +1,27 @@
 import React, { useEffect, useState } from 'react'
 import { transitClient } from '../api'
 
+const WEEKDAYS = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo']
+const WEEKDAY_VALUES = [1, 2, 3, 4, 5, 6, 0] // 0=Sun, 1=Mon...
+
 export default function ScheduleMaker({ token, user }) {
   const client = transitClient(token)
   const [schedules, setSchedules] = useState([])
   const [busLines, setBusLines] = useState([])
   const [buses, setBuses] = useState([])
+  const [drivers, setDrivers] = useState([])
   const [message, setMessage] = useState(null)
   const [isAdmin] = useState(Boolean(user?.userCode))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [expandedSchedule, setExpandedSchedule] = useState(null)
 
   // Form state
   const [selectedLine, setSelectedLine] = useState('')
   const [selectedBus, setSelectedBus] = useState('')
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
   const [startTime, setStartTime] = useState('08:00')
-  const [endTime, setEndTime] = useState('17:00')
   const [driverId, setDriverId] = useState('')
+  const [selectedWeekdays, setSelectedWeekdays] = useState([])
 
   const loadSchedules = async () => {
     try {
@@ -45,39 +50,51 @@ export default function ScheduleMaker({ token, user }) {
     }
   }
 
+  const loadDrivers = async () => {
+    try {
+      const res = await client.get('/admin/drivers')
+      setDrivers(res.data.drivers || [])
+    } catch (err) {
+      setMessage('Error loading drivers: ' + (err.response?.data?.error || err.message))
+    }
+  }
+
   useEffect(() => {
     loadSchedules()
     loadBusLines()
     loadBuses()
+    loadDrivers()
   }, [])
 
   const createSchedule = async (e) => {
     e.preventDefault()
     setMessage(null)
 
-    if (!selectedLine || !selectedBus || !startTime || !endTime) {
-      setMessage('Alle velden zijn verplicht')
+    if (!selectedLine || !selectedBus || !startTime) {
+      setMessage('Lijn, voertuig en start-tijd zijn verplicht')
       return
     }
 
     try {
       const startDateTime = `${selectedDate}T${startTime}:00`
-      const endDateTime = `${selectedDate}T${endTime}:00`
 
       const res = await client.post('/admin/schedules', {
         busLineId: Number(selectedLine),
         busId: Number(selectedBus),
         driverId: driverId ? Number(driverId) : null,
         startTime: startDateTime,
-        endTime: endDateTime,
+        weekdays: selectedWeekdays,
       })
 
-      setMessage('Dienst aangemaakt: #' + res.data.schedule.id)
+      const dayLabels = selectedWeekdays.length > 0
+        ? selectedWeekdays.map(d => WEEKDAYS[WEEKDAY_VALUES.indexOf(d)]).join(', ')
+        : 'eenmalig'
+      setMessage(`Dienst aangemaakt: #${res.data.schedule.id} (${dayLabels})`)
       setSelectedLine('')
       setSelectedBus('')
       setStartTime('08:00')
-      setEndTime('17:00')
       setDriverId('')
+      setSelectedWeekdays([])
       await loadSchedules()
     } catch (err) {
       const errMsg = err.response?.data?.error || err.message
@@ -98,6 +115,28 @@ export default function ScheduleMaker({ token, user }) {
     }
   }
 
+  const toggleWeekday = (dayValue) => {
+    setSelectedWeekdays(prev =>
+      prev.includes(dayValue)
+        ? prev.filter(d => d !== dayValue)
+        : [...prev, dayValue]
+    )
+  }
+
+  const getWeekdayLabel = (weekdayValues) => {
+    if (!weekdayValues || weekdayValues.length === 0) return 'Eenmalig'
+    if (weekdayValues.length === 7) return 'Dagelijks'
+    const labels = weekdayValues
+      .sort()
+      .map(w => WEEKDAYS[WEEKDAY_VALUES.indexOf(w)])
+    return labels.join(', ')
+  }
+
+  const formatTime = (timeString) => {
+    const date = new Date(timeString)
+    return date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+  }
+
   // Group schedules by date and time
   const timeSlots = generateTimeSlots()
   const schedulesBySlot = groupSchedulesByTimeSlot(schedules, timeSlots)
@@ -107,7 +146,7 @@ export default function ScheduleMaker({ token, user }) {
       <div className="section-header">
         <div>
           <h2>Diensten Inplannen</h2>
-          <p>Maak diensten aan en wijs voertuigen en lijnen toe.</p>
+          <p>Maak diensten aan met automatische eindtijd, vertrektijden per halte en herhaald rooster.</p>
         </div>
         <button className="secondary" onClick={loadSchedules}>Refresh</button>
       </div>
@@ -132,6 +171,18 @@ export default function ScheduleMaker({ token, user }) {
               ))}
             </select>
           </div>
+
+          <div className="form-row">
+            <select value={driverId} onChange={e => setDriverId(e.target.value)}>
+              <option value="">Bestuurder (optioneel)</option>
+              {drivers.map(driver => (
+                <option key={driver.id} value={driver.id}>
+                  {driver.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="form-row">
             <input
               type="date"
@@ -144,21 +195,36 @@ export default function ScheduleMaker({ token, user }) {
               onChange={e => setStartTime(e.target.value)}
               placeholder="Start time"
             />
-            <input
-              type="time"
-              value={endTime}
-              onChange={e => setEndTime(e.target.value)}
-              placeholder="End time"
-            />
-            <input
-              type="text"
-              value={driverId}
-              onChange={e => setDriverId(e.target.value)}
-              placeholder="Driver ID (optional)"
-            />
           </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>
+              Herhaal op weekdagen (optioneel):
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {WEEKDAYS.map((day, idx) => (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => toggleWeekday(WEEKDAY_VALUES[idx])}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: selectedWeekdays.includes(WEEKDAY_VALUES[idx]) ? '#1D4ED8' : '#e0e0e0',
+                    color: selectedWeekdays.includes(WEEKDAY_VALUES[idx]) ? '#fff' : '#000',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.9rem',
+                  }}
+                >
+                  {day}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="form-row">
-            <button type="submit">Create Service</button>
+            <button type="submit">Dienst Aanmaken</button>
           </div>
         </form>
       )}
@@ -182,16 +248,71 @@ export default function ScheduleMaker({ token, user }) {
                       <article
                         key={schedule.id}
                         className="schedule-card"
-                        draggable
+                        style={{ position: 'relative' }}
                       >
                         <div className="schedule-header">
                           <strong>Lijn {schedule.lineNumber}</strong>
-                          <span className="schedule-time">{formatTime(schedule.startTime)}</span>
+                          <span className="schedule-time">
+                            {formatTime(schedule.startTime)} - {formatTime(schedule.endTime)}
+                          </span>
                         </div>
                         <div className="schedule-details">
                           <div>{schedule.busName}</div>
                           <div className="schedule-plate">{schedule.licensePlate}</div>
+                          {schedule.driverName && (
+                            <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                              {schedule.driverName}
+                            </div>
+                          )}
+                          {schedule.weekdays && schedule.weekdays.length > 0 && (
+                            <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                              {getWeekdayLabel(schedule.weekdays)}
+                            </div>
+                          )}
                         </div>
+
+                        {/* Expandable stops list */}
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSchedule(expandedSchedule === schedule.id ? null : schedule.id)}
+                          style={{
+                            marginTop: '0.5rem',
+                            width: '100%',
+                            padding: '0.4rem',
+                            fontSize: '0.85rem',
+                            backgroundColor: '#f0f0f0',
+                            border: '1px solid #ddd',
+                            borderRadius: '3px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {expandedSchedule === schedule.id ? '▼' : '▶'} Haltes ({schedule.departureTimes?.length || 0})
+                        </button>
+
+                        {expandedSchedule === schedule.id && (
+                          <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid #eee' }}>
+                            {schedule.departureTimes && schedule.departureTimes.length > 0 ? (
+                              <table style={{ width: '100%', fontSize: '0.8rem' }}>
+                                <tbody>
+                                  {schedule.departureTimes.map(stop => (
+                                    <tr key={stop.stopId}>
+                                      <td style={{ paddingRight: '0.5rem' }}>
+                                        <strong>{stop.order}.</strong>
+                                      </td>
+                                      <td style={{ flex: 1 }}>{stop.stopName}</td>
+                                      <td style={{ textAlign: 'right', color: '#666' }}>
+                                        {formatTime(stop.departureTime)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            ) : (
+                              <p style={{ fontSize: '0.85rem', color: '#999' }}>Geen haltes gekoppeld</p>
+                            )}
+                          </div>
+                        )}
+
                         {isAdmin && (
                           <button
                             className="danger"
@@ -268,7 +389,7 @@ function groupSchedulesByTimeSlot(schedules, slots) {
 
 function formatTime(timeString) {
   const date = new Date(timeString)
-  return date.toLocaleTimeString('en-NL', { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
 }
 
 const overlay = {

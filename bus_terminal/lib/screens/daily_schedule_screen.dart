@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/schedule.dart';
 import '../services/schedule_service.dart';
+import '../services/auth_service.dart';
+import '../services/exceptions.dart';
 import '../widgets/route_card.dart';
 
 class DailyScheduleScreen extends StatefulWidget {
@@ -12,6 +14,7 @@ class DailyScheduleScreen extends StatefulWidget {
 
 class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
   final _scheduleService = ScheduleService();
+  final _authService = AuthService();
   late Future<DailySchedule> _scheduleFuture;
   DateTime _selectedDate = DateTime.now();
 
@@ -19,6 +22,13 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
   void initState() {
     super.initState();
     _scheduleFuture = _scheduleService.getTodaySchedule();
+  }
+
+  Future<void> _handleLogout() async {
+    await _authService.logout();
+    if (mounted) {
+      Navigator.of(context).pushReplacementNamed('/login');
+    }
   }
 
   Future<void> _refreshSchedule() async {
@@ -65,6 +75,13 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
       appBar: AppBar(
         title: const Text('Today on the Road'),
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Logout',
+            onPressed: _handleLogout,
+          ),
+        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -149,6 +166,13 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
                   }
 
                   if (snapshot.hasError) {
+                    // Auto-logout on session expiry
+                    if (snapshot.error is UnauthorizedException) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _handleLogout();
+                      });
+                    }
+
                     return Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -162,21 +186,27 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              'Failed to load schedule',
+                              snapshot.error is UnauthorizedException
+                                  ? 'Session Expired'
+                                  : 'Failed to load schedule',
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              snapshot.error.toString(),
+                              snapshot.error is UnauthorizedException
+                                  ? 'Redirecting to login...'
+                                  : snapshot.error.toString(),
                               style: Theme.of(context).textTheme.bodySmall,
                               textAlign: TextAlign.center,
                             ),
-                            const SizedBox(height: 24),
-                            FilledButton.icon(
-                              onPressed: _refreshSchedule,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Retry'),
-                            ),
+                            if (snapshot.error is! UnauthorizedException) ...[
+                              const SizedBox(height: 24),
+                              FilledButton.icon(
+                                onPressed: _refreshSchedule,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Retry'),
+                              ),
+                            ],
                           ],
                         ),
                       ),
