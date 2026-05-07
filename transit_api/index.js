@@ -1334,10 +1334,10 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
       const weekdays = parseWeekdaysValue(row.weekdays);
       
       return {
-        id: row.id,
-        busLineId: row.bus_line_id,
-        busId: row.bus_id,
-        driverId: row.driver_id,
+        id: Number(row.id),
+        busLineId: Number(row.bus_line_id),
+        busId: Number(row.bus_id),
+        driverId: row.driver_id !== null && row.driver_id !== undefined ? Number(row.driver_id) : null,
         driverName: row.driver_name || null,
         startTime: row.start_time,
         endTime: row.end_time,
@@ -1450,10 +1450,10 @@ app.post('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =
 
     res.status(201).json({
       schedule: {
-        id: schedule.id,
-        busLineId: schedule.bus_line_id,
-        busId: schedule.bus_id,
-        driverId: schedule.driver_id,
+        id: Number(schedule.id),
+        busLineId: Number(schedule.bus_line_id),
+        busId: Number(schedule.bus_id),
+        driverId: schedule.driver_id !== null && schedule.driver_id !== undefined ? Number(schedule.driver_id) : null,
         startTime: schedule.start_time,
         endTime: schedule.end_time,
         weekdays: weekdaysResult,
@@ -1495,7 +1495,7 @@ app.delete('/admin/schedules/:scheduleId', authMiddleware, adminMiddleware, asyn
       return res.status(404).json({ error: 'schedule_not_found' });
     }
 
-    res.json({ success: true, schedule: result.rows[0] });
+    res.json({ success: true, schedule: { id: Number(result.rows[0].id) } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal_error', details: err.message });
@@ -1563,9 +1563,9 @@ app.get('/schedules', async (req, res) => {
 
     res.json({
       schedules: result.rows.map(row => ({
-        id: row.id,
-        busLineId: row.bus_line_id,
-        busId: row.bus_id,
+        id: Number(row.id),
+        busLineId: Number(row.bus_line_id),
+        busId: Number(row.bus_id),
         startTime: row.start_time,
         endTime: row.end_time,
         weekdays: row.weekdays ? (typeof row.weekdays === 'string' ? JSON.parse(row.weekdays) : row.weekdays) : [],
@@ -1638,9 +1638,9 @@ app.get('/schedules/:scheduleId', async (req, res) => {
     
     res.json({
       schedule: {
-        id: row.id,
-        busLineId: row.bus_line_id,
-        busId: row.bus_id,
+        id: Number(row.id),
+        busLineId: Number(row.bus_line_id),
+        busId: Number(row.bus_id),
         startTime: row.start_time,
         endTime: row.end_time,
         status: row.status,
