@@ -70,6 +70,24 @@ class _NavigationScreenState extends State<NavigationScreen> {
         }
       }
 
+      // Defensive: filter out invalid stops (missing/NaN coordinates) and deduplicate
+      if (_stops != null) {
+        _stops = _stops!
+            .where((s) => s != null)
+            .where((s) => s.latitude != null && s.longitude != null)
+            .where((s) => s.latitude.isFinite && s.longitude.isFinite)
+            .toList();
+
+        // Remove exact duplicates by lat/lon
+        final seen = <String>{};
+        _stops = _stops!.where((s) {
+          final key = '${s.latitude.toStringAsFixed(6)}|${s.longitude.toStringAsFixed(6)}';
+          if (seen.contains(key)) return false;
+          seen.add(key);
+          return true;
+        }).toList();
+      }
+
       // Determine start and end points: prefer stop locations if available.
       // If no stops are returned from the API, geocode the stop names.
       late NavigationPoint startPoint;
@@ -84,6 +102,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         if (mounted) {
           setState(() {
             _currentRoute = optimized.route;
+            // limit alternatives to first two to avoid rendering many polylines
             _alternativeRoutes = null;
             _isLoading = false;
           });
@@ -132,13 +151,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
       // Get route without waypoints
       final navRoute = await _navigationService.getRoute(start: startPoint, end: endPoint);
 
-      // Get alternative routes
+      // Get alternative routes (but cap to a small number)
       final alternatives = await _navigationService.getMultipleRoutes(start: startPoint, end: endPoint);
 
       if (mounted) {
         setState(() {
           _currentRoute = navRoute;
-          _alternativeRoutes = alternatives;
+          _alternativeRoutes = (alternatives ?? []).take(2).toList();
           _isLoading = false;
         });
 
@@ -156,11 +175,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _fitMapToRoute(NavigationRoute route) {
-    final allPoints = <LatLng>[
-      ...route.getAllPoints().map((point) => LatLng(point.latitude, point.longitude)),
-      ...(_stops ?? []).map((stop) => LatLng(stop.latitude, stop.longitude)),
-      if (_currentLocation != null) LatLng(_currentLocation!.latitude, _currentLocation!.longitude),
-    ];
+    // Build list of points to include in bounds, filter invalids
+    final allPoints = <LatLng>[];
+    allPoints.addAll(route.getAllPoints().where((p) => p.latitude.isFinite && p.longitude.isFinite).map((point) => LatLng(point.latitude, point.longitude)));
+    allPoints.addAll((_stops ?? []).where((s) => s.latitude.isFinite && s.longitude.isFinite).map((stop) => LatLng(stop.latitude, stop.longitude)));
+    if (_currentLocation != null && _currentLocation!.latitude.isFinite && _currentLocation!.longitude.isFinite) {
+      allPoints.add(LatLng(_currentLocation!.latitude, _currentLocation!.longitude));
+    }
+
     if (allPoints.isEmpty) return;
 
     double minLat = allPoints.first.latitude;
@@ -175,9 +197,28 @@ class _NavigationScreenState extends State<NavigationScreen> {
       maxLon = max(maxLon, point.longitude);
     }
 
+    // Clamp bounds to a reasonable maximum span to avoid huge map tiles requests
+    const double maxSpanDegrees = 2.0; // ~222km lat span per degree ~111km; 2 degrees ~222km
+    final latSpan = maxLat - minLat;
+    final lonSpan = maxLon - minLon;
+
+    double centerLat = (minLat + maxLat) / 2.0;
+    double centerLon = (minLon + maxLon) / 2.0;
+
+    double halfLat = latSpan / 2.0;
+    double halfLon = lonSpan / 2.0;
+
+    if (latSpan > maxSpanDegrees) halfLat = maxSpanDegrees / 2.0;
+    if (lonSpan > maxSpanDegrees) halfLon = maxSpanDegrees / 2.0;
+
+    final clampedMinLat = centerLat - halfLat;
+    final clampedMaxLat = centerLat + halfLat;
+    final clampedMinLon = centerLon - halfLon;
+    final clampedMaxLon = centerLon + halfLon;
+
     final bounds = LatLngBounds(
-      LatLng(minLat, minLon),
-      LatLng(maxLat, maxLon),
+      LatLng(clampedMinLat, clampedMinLon),
+      LatLng(clampedMaxLat, clampedMaxLon),
     );
 
     _mapController.fitBounds(
