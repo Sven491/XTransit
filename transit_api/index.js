@@ -732,8 +732,129 @@ app.post('/admin/fleet/buses', authMiddleware, adminMiddleware, async (req, res)
 });
 
 // ============================================
+// ADMIN - Update fleet bus
+// ============================================
+app.patch('/admin/fleet/buses/:busId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { busId } = req.params;
+    const { name, seatCapacity, licensePlate } = req.body;
+
+    if (!busId || !Number.isFinite(Number(busId))) {
+      return res.status(400).json({ error: 'invalid_bus_id' });
+    }
+
+    if (DEV_MOCK) {
+      const bus = _mock.fleetBuses.find(b => Number(b.id) === Number(busId));
+      if (!bus) return res.status(404).json({ error: 'bus_not_found' });
+      if (name !== undefined) bus.name = name;
+      if (seatCapacity !== undefined) bus.seatCapacity = Number(seatCapacity);
+      if (licensePlate !== undefined) bus.licensePlate = licensePlate;
+      bus.updatedAt = new Date().toISOString();
+      return res.json({ bus });
+    }
+
+    const result = await db.query(`
+      UPDATE fleet.bus
+      SET name = COALESCE($1, name), seat_capacity = COALESCE($2, seat_capacity), license_plate = COALESCE($3, license_plate), updated_at = NOW()
+      WHERE id = $4
+      RETURNING id, name, seat_capacity, license_plate
+    `, [name ?? null, seatCapacity ?? null, licensePlate ?? null, busId]);
+
+    if (!result.rows[0]) return res.status(404).json({ error: 'bus_not_found' });
+
+    const bus = result.rows[0];
+    res.json({ bus: { id: bus.id, name: bus.name, seatCapacity: bus.seat_capacity, licensePlate: bus.license_plate } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Delete fleet bus
+// ============================================
+app.delete('/admin/fleet/buses/:busId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { busId } = req.params;
+    if (!busId || !Number.isFinite(Number(busId))) {
+      return res.status(400).json({ error: 'invalid_bus_id' });
+    }
+
+    if (DEV_MOCK) {
+      const idx = _mock.fleetBuses.findIndex(b => Number(b.id) === Number(busId));
+      if (idx === -1) return res.status(404).json({ error: 'bus_not_found' });
+      const deleted = _mock.fleetBuses.splice(idx, 1)[0];
+      return res.json({ success: true, bus: deleted });
+    }
+
+    const result = await db.query(`DELETE FROM fleet.bus WHERE id = $1 RETURNING id, name`, [busId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'bus_not_found' });
+    res.json({ success: true, bus: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
 // ADMIN - Link stop to bus line
 // ============================================
+app.get('/admin/bus-lines/:busLineId/stops', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { busLineId } = req.params;
+    if (!busLineId || !Number.isFinite(Number(busLineId))) {
+      return res.status(400).json({ error: 'invalid_bus_line_id' });
+    }
+
+    if (DEV_MOCK) {
+      const stops = _mock.routeStops
+        .filter(rs => String(rs.busLineId) === String(busLineId))
+        .sort((a, b) => a.stopOrder - b.stopOrder)
+        .map(rs => ({
+          id: rs.id,
+          busLineId: rs.busLineId,
+          stopId: rs.stopId,
+          stopOrder: rs.stopOrder,
+          estimatedArrivalMinutes: rs.estimatedArrivalMinutes,
+          name: rs.name,
+          latitude: rs.latitude,
+          longitude: rs.longitude,
+        }));
+      return res.json({ routeStops: stops });
+    }
+
+    const result = await db.query(`
+      SELECT
+        rs.id,
+        rs.bus_line_id,
+        rs.stop_id,
+        rs.stop_order,
+        rs.estimated_arrival_minutes,
+        s.name as stop_name,
+        s.latitude,
+        s.longitude
+      FROM transit.route_stops rs
+      JOIN transit.stops s ON s.id = rs.stop_id
+      WHERE rs.bus_line_id = $1
+      ORDER BY rs.stop_order ASC
+    `, [busLineId]);
+
+    res.json({ routeStops: result.rows.map(row => ({
+      id: row.id,
+      busLineId: row.bus_line_id,
+      stopId: row.stop_id,
+      stopOrder: row.stop_order,
+      estimatedArrivalMinutes: row.estimated_arrival_minutes,
+      name: row.stop_name,
+      latitude: parseFloat(row.latitude),
+      longitude: parseFloat(row.longitude),
+    })) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
 app.post('/admin/bus-lines/:busLineId/stops', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { busLineId } = req.params;
@@ -948,6 +1069,55 @@ app.delete('/admin/stops/:stopId', authMiddleware, adminMiddleware, async (req, 
     if (err.code === '23503') {
       return res.status(409).json({ error: 'foreign_key_violation', message: 'This stop is referenced by route_stops' });
     }
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Update a stop
+// ============================================
+app.patch('/admin/stops/:stopId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { stopId } = req.params;
+    const { name, latitude, longitude } = req.body;
+
+    if (!stopId || !Number.isFinite(Number(stopId))) {
+      return res.status(400).json({ error: 'invalid_stop_id' });
+    }
+
+    if (DEV_MOCK) {
+      const stop = _mock.stops.find(s => Number(s.id) === Number(stopId));
+      if (!stop) return res.status(404).json({ error: 'stop_not_found' });
+      if (name !== undefined) stop.name = name;
+      if (latitude !== undefined) stop.latitude = parseFloat(latitude);
+      if (longitude !== undefined) stop.longitude = parseFloat(longitude);
+      stop.updatedAt = new Date().toISOString();
+      return res.json({ stop });
+    }
+
+    const result = await db.query(
+      `UPDATE transit.stops
+       SET name = COALESCE($1, name),
+           latitude = COALESCE($2, latitude),
+           longitude = COALESCE($3, longitude),
+           updated_at = NOW()
+       WHERE id = $4
+       RETURNING id, name, latitude, longitude, created_at, updated_at`
+    , [name ?? null, latitude ?? null, longitude ?? null, stopId]);
+
+    if (!result.rows[0]) return res.status(404).json({ error: 'stop_not_found' });
+
+    const stop = result.rows[0];
+    res.json({ stop: {
+      id: stop.id,
+      name: stop.name,
+      latitude: parseFloat(stop.latitude),
+      longitude: parseFloat(stop.longitude),
+      createdAt: stop.created_at,
+      updatedAt: stop.updated_at,
+    }});
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'internal_error', details: err.message });
   }
 });

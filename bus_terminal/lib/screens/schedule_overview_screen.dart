@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import '../models/schedule.dart';
+import '../models/schedule.dart' as sched;
+import '../models/navigation.dart';
 import '../services/auth_service.dart';
 import '../services/schedule_service.dart';
+import '../screens/navigation_screen.dart';
 
 class ScheduleOverviewScreen extends StatefulWidget {
   const ScheduleOverviewScreen({super.key});
@@ -14,7 +16,7 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
   final _scheduleService = ScheduleService();
   final _authService = AuthService();
 
-  late Future<List<ServiceSchedule>> _scheduleFuture;
+  late Future<List<sched.ServiceSchedule>> _scheduleFuture;
   DateTime _selectedDate = DateTime.now();
 
   @override
@@ -61,9 +63,9 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
     }
   }
 
-  Future<void> _showScheduleDetails(ServiceSchedule schedule) async {
+  Future<void> _showScheduleDetails(sched.ServiceSchedule svc) async {
     try {
-      final stops = await _scheduleService.getScheduleStops(schedule.id);
+      final stops = await _scheduleService.getScheduleStops(svc.id);
       if (!mounted) return;
 
       await showModalBottomSheet<void>(
@@ -82,19 +84,19 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                 children: [
                   Text(
-                    'Lijn ${schedule.lineNumber}',
+                    'Lijn ${svc.lineNumber}',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.w800,
                         ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    schedule.busName,
+                    svc.busName,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${_formatTime(schedule.startTime)} - ${_formatTime(schedule.endTime)}',
+                    '${_formatTime(svc.startTime)} - ${_formatTime(svc.endTime)}',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 12),
@@ -102,11 +104,56 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      _InfoChip(label: schedule.status),
-                      _InfoChip(label: schedule.isRecurring ? _weekdayLabel(schedule.weekdays) : 'Eenmalig'),
+                      _InfoChip(label: svc.status),
+                      _InfoChip(label: svc.isRecurring ? _weekdayLabel(svc.weekdays) : 'Eenmalig'),
                     ],
                   ),
                   const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        // Close the sheet and start navigation with provided stops
+                        Navigator.of(sheetContext).pop();
+
+                        final routeObj = sched.Route(
+                          id: (svc.id is num) ? (svc.id as num).toInt() : int.tryParse(svc.id.toString()) ?? 0,
+                          busLine: sched.BusLine(
+                            id: svc.busLineId,
+                            lineNumber: svc.lineNumber,
+                            startStop: '',
+                            endStop: '',
+                            estimatedDuration: 0,
+                          ),
+                          busType: sched.BusType(
+                            id: svc.busId,
+                            name: svc.busName,
+                            seatCapacity: 0,
+                            licensePlate: '',
+                          ),
+                          startTime: svc.startTime,
+                          endTime: svc.endTime,
+                          status: svc.status,
+                        );
+
+                        final navStops = stops
+                                .map((s) => NavigationPoint(
+                                      latitude: s.latitude,
+                                      longitude: s.longitude,
+                                      name: s.name,
+                                    ))
+                                .toList();
+
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => NavigationScreen(route: routeObj, initialStops: navStops),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.navigation),
+                      label: const Text('Start route'),
+                    ),
+                  ),
                   Text(
                     'Haltes',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -121,7 +168,7 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
                     )
                   else
                     ...stops.map((stop) {
-                      final departureTime = schedule.startTime.add(
+                      final departureTime = svc.startTime.add(
                         Duration(minutes: stop.estimatedArrivalMinutes),
                       );
                       return Card(
@@ -240,7 +287,7 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
               ),
             ),
             Expanded(
-              child: FutureBuilder<List<ServiceSchedule>>(
+                  child: FutureBuilder<List<sched.ServiceSchedule>>(
                 future: _scheduleFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
@@ -339,7 +386,7 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
 }
 
 class _ScheduleSummaryCard extends StatelessWidget {
-  final ServiceSchedule schedule;
+  final sched.ServiceSchedule schedule;
   final VoidCallback onTap;
 
   const _ScheduleSummaryCard({

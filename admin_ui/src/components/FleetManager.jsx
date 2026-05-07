@@ -10,6 +10,8 @@ export default function FleetManager({ token, user }) {
   const [message, setMessage] = useState(null)
   const [canCreateBus, setCanCreateBus] = useState(true)
   const [isAdmin] = useState(Boolean(user?.userCode))
+  const [editingBus, setEditingBus] = useState(null)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
   const loadBuses = async () => {
     try {
@@ -65,6 +67,12 @@ export default function FleetManager({ token, user }) {
             <strong>#{bus.id} {bus.name}</strong>
             <div>Seats: {bus.seatCapacity}</div>
             <div>Plate: {bus.licensePlate}</div>
+            {isAdmin && (
+              <>
+                <button className="secondary" style={{ marginTop: '0.5rem', width: '100%' }} onClick={() => setEditingBus(bus)}>Edit</button>
+                <button className="danger" style={{ marginTop: '0.5rem', width: '100%' }} onClick={() => setDeleteConfirm(bus)}>Delete</button>
+              </>
+            )}
           </article>
         ))}
       </div>
@@ -83,6 +91,62 @@ export default function FleetManager({ token, user }) {
       )}
 
       {message && <div className="message">{message}</div>}
+
+      {editingBus && (
+        <div style={overlay}>
+          <div style={modal}>
+            <h3>Edit Bus</h3>
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              setMessage(null)
+              try {
+                await client.patch(`/admin/fleet/buses/${editingBus.id}`, {
+                  name: editingBus.name,
+                  seatCapacity: Number(editingBus.seatCapacity),
+                  licensePlate: editingBus.licensePlate,
+                })
+                setMessage('Bus updated')
+                setEditingBus(null)
+                await loadBuses()
+              } catch (err) {
+                setMessage('Error: ' + (err.response?.data?.error || err.message))
+              }
+            }} className="stack-form">
+              <div className="form-row">
+                <input value={editingBus.name} onChange={e => setEditingBus({...editingBus, name: e.target.value})} />
+                <input value={editingBus.seatCapacity} onChange={e => setEditingBus({...editingBus, seatCapacity: e.target.value})} />
+                <input value={editingBus.licensePlate} onChange={e => setEditingBus({...editingBus, licensePlate: e.target.value})} />
+              </div>
+              <div className="form-row" style={{ marginTop: '1rem' }}>
+                <button className="secondary" type="button" onClick={() => setEditingBus(null)}>Cancel</button>
+                <button type="submit">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div style={overlay}>
+          <div style={modal}>
+            <h3>Delete Bus?</h3>
+            <p><strong>{deleteConfirm.name}</strong></p>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+              <button className="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</button>
+              <button className="danger" onClick={async () => {
+                try {
+                  await client.delete(`/admin/fleet/buses/${deleteConfirm.id}`)
+                  setMessage('Bus deleted')
+                  setDeleteConfirm(null)
+                  await loadBuses()
+                } catch (err) {
+                  setMessage('Error: ' + (err.response?.data?.error || err.message))
+                }
+              }}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

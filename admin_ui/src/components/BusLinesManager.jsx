@@ -13,6 +13,7 @@ export default function BusLinesManager({ token, user }) {
   const [message, setMessage] = useState(null)
   const [isAdmin] = useState(Boolean(user?.userCode))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [editingLine, setEditingLine] = useState(null)
 
   const loadBusLines = async () => {
     try {
@@ -41,10 +42,14 @@ export default function BusLinesManager({ token, user }) {
     e.preventDefault()
     setMessage(null)
     try {
+      // Map selected stop ids to names (server currently stores names)
+      const startStopName = stops.find(s => String(s.id) === String(startStop))?.name || startStop
+      const endStopName = stops.find(s => String(s.id) === String(endStop))?.name || endStop
+
       const res = await client.post('/admin/bus-lines', {
         lineNumber: Number(lineNumber),
-        startStop,
-        endStop,
+        startStop: startStopName,
+        endStop: endStopName,
         estimatedDurationMinutes: Number(estimatedDurationMinutes),
         description,
       })
@@ -91,13 +96,29 @@ export default function BusLinesManager({ token, user }) {
             <div>{line.estimatedDurationMinutes} min</div>
             {line.description ? <div className="muted">{line.description}</div> : null}
             {isAdmin && (
-              <button 
-                className="danger" 
-                onClick={() => setDeleteConfirm(line)}
-                style={{ marginTop: '0.5rem', width: '100%' }}
-              >
-                Delete
-              </button>
+              <>
+                <button 
+                  className="danger" 
+                  onClick={() => setDeleteConfirm(line)}
+                  style={{ marginTop: '0.5rem', width: '100%' }}
+                >
+                  Delete
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => setEditingLine({
+                    id: line.id,
+                    lineNumber: line.lineNumber,
+                    startStop: (stops.find(s => s.name === line.startStop) || {}).id || line.startStop,
+                    endStop: (stops.find(s => s.name === line.endStop) || {}).id || line.endStop,
+                    estimatedDurationMinutes: line.estimatedDurationMinutes,
+                    description: line.description || '',
+                  })}
+                  style={{ marginTop: '0.5rem', width: '100%' }}
+                >
+                  Edit
+                </button>
+              </>
             )}
           </article>
         ))}
@@ -110,13 +131,13 @@ export default function BusLinesManager({ token, user }) {
             <select value={startStop} onChange={e => setStartStop(e.target.value)}>
               <option value="">Start stop</option>
               {stops.map(stop => (
-                <option key={stop.id} value={stop.name}>#{stop.id} {stop.name}</option>
+                <option key={stop.id} value={stop.id}>#{stop.id} {stop.name}</option>
               ))}
             </select>
             <select value={endStop} onChange={e => setEndStop(e.target.value)}>
               <option value="">End stop</option>
               {stops.map(stop => (
-                <option key={stop.id} value={stop.name}>#{stop.id} {stop.name}</option>
+                <option key={stop.id} value={stop.id}>#{stop.id} {stop.name}</option>
               ))}
             </select>
           </div>
@@ -129,6 +150,60 @@ export default function BusLinesManager({ token, user }) {
       ) : <div>You must be admin to create bus lines.</div>}
 
       {message && <div className="message">{message}</div>}
+
+      {editingLine && (
+        <div style={overlay}>
+          <div style={modal}>
+            <h3>Edit Bus Line</h3>
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              setMessage(null)
+              try {
+                const startStopName = stops.find(s => String(s.id) === String(editingLine.startStop))?.name || editingLine.startStop
+                const endStopName = stops.find(s => String(s.id) === String(editingLine.endStop))?.name || editingLine.endStop
+
+                await client.patch(`/admin/bus-lines/${editingLine.id}`, {
+                  lineNumber: Number(editingLine.lineNumber),
+                  startStop: startStopName,
+                  endStop: endStopName,
+                  estimatedDurationMinutes: Number(editingLine.estimatedDurationMinutes),
+                  description: editingLine.description,
+                })
+
+                setMessage('Bus line updated')
+                setEditingLine(null)
+                await loadBusLines()
+              } catch (err) {
+                setMessage('Error: ' + (err.response?.data?.error || err.message))
+              }
+            }} className="stack-form">
+              <div className="form-row">
+                <input value={editingLine.lineNumber} onChange={e => setEditingLine({...editingLine, lineNumber: e.target.value})} />
+                <select value={editingLine.startStop} onChange={e => setEditingLine({...editingLine, startStop: e.target.value})}>
+                  <option value="">Start stop</option>
+                  {stops.map(stop => (
+                    <option key={stop.id} value={stop.id}>#{stop.id} {stop.name}</option>
+                  ))}
+                </select>
+                <select value={editingLine.endStop} onChange={e => setEditingLine({...editingLine, endStop: e.target.value})}>
+                  <option value="">End stop</option>
+                  {stops.map(stop => (
+                    <option key={stop.id} value={stop.id}>#{stop.id} {stop.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-row">
+                <input value={editingLine.estimatedDurationMinutes} onChange={e => setEditingLine({...editingLine, estimatedDurationMinutes: e.target.value})} />
+                <input value={editingLine.description} onChange={e => setEditingLine({...editingLine, description: e.target.value})} />
+              </div>
+              <div className="form-row" style={{ marginTop: '1rem' }}>
+                <button className="secondary" type="button" onClick={() => setEditingLine(null)}>Cancel</button>
+                <button type="submit">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {deleteConfirm && (
         <div style={overlay}>

@@ -11,10 +11,12 @@ import '../services/schedule_service.dart';
 
 class NavigationScreen extends StatefulWidget {
   final schedule.Route route;
+  final List<NavigationPoint>? initialStops;
 
   const NavigationScreen({
     super.key,
     required this.route,
+    this.initialStops,
   });
 
   @override
@@ -54,13 +56,18 @@ class _NavigationScreenState extends State<NavigationScreen> {
       final currentLoc = await _navigationService.getCurrentLocation();
       setState(() => _currentLocation = currentLoc);
 
-      // Fetch stops for the bus line from the API (if available)
-      try {
-        _stops = await _scheduleService.getStops(widget.route.busLine.id);
+      // Use provided initial stops when available, otherwise fetch from API
+      if (widget.initialStops != null) {
+        _stops = widget.initialStops;
         _stopsFetchError = null;
-      } catch (e) {
-        _stops = [];
-        _stopsFetchError = e.toString().replaceAll('Exception: ', '');
+      } else {
+        try {
+          _stops = await _scheduleService.getStops(widget.route.busLine.id);
+          _stopsFetchError = null;
+        } catch (e) {
+          _stops = [];
+          _stopsFetchError = e.toString().replaceAll('Exception: ', '');
+        }
       }
 
       // Determine start and end points: prefer stop locations if available.

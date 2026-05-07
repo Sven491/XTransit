@@ -15,6 +15,7 @@ export default function ScheduleMaker({ token, user }) {
   const [isAdmin] = useState(Boolean(user?.userCode))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [expandedSchedule, setExpandedSchedule] = useState(null)
+  const [routeStopsByLine, setRouteStopsByLine] = useState({})
 
   // Form state
   const [selectedLine, setSelectedLine] = useState('')
@@ -136,6 +137,18 @@ export default function ScheduleMaker({ token, user }) {
   const formatTime = (timeString) => {
     const date = new Date(timeString)
     return date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  // Fetch route stops for a given line and cache them in state
+  const loadRouteStops = async (busLineId) => {
+    if (!busLineId) return
+    try {
+      const res = await client.get(`/admin/bus-lines/${busLineId}/stops`)
+      const routeStops = res.data.routeStops || []
+      setRouteStopsByLine(prev => ({ ...prev, [busLineId]: routeStops }))
+    } catch (err) {
+      // ignore silently, message already used elsewhere
+    }
   }
 
   const getCandidateWindow = () => {
@@ -385,25 +398,67 @@ export default function ScheduleMaker({ token, user }) {
 
                         {expandedSchedule === schedule.id && (
                           <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid #eee' }}>
-                            {schedule.departureTimes && schedule.departureTimes.length > 0 ? (
-                              <table style={{ width: '100%', fontSize: '0.8rem' }}>
-                                <tbody>
-                                  {schedule.departureTimes.map(stop => (
-                                    <tr key={stop.stopId}>
-                                      <td style={{ paddingRight: '0.5rem' }}>
-                                        <strong>{stop.order}.</strong>
-                                      </td>
-                                      <td style={{ flex: 1 }}>{stop.stopName}</td>
-                                      <td style={{ textAlign: 'right', color: '#666' }}>
-                                        {formatTime(stop.departureTime)}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            ) : (
-                              <p style={{ fontSize: '0.85rem', color: '#999' }}>Geen haltes gekoppeld</p>
-                            )}
+                            {(() => {
+                              const lineId = schedule.busLineId
+                              const cached = routeStopsByLine[lineId]
+                              if (!cached) {
+                                // Load and show loading text
+                                loadRouteStops(lineId)
+                                return <p style={{ fontSize: '0.85rem', color: '#999' }}>Laden haltes...</p>
+                              }
+
+                              if (cached.length === 0) {
+                                return <p style={{ fontSize: '0.85rem', color: '#999' }}>Geen haltes gekoppeld</p>
+                              }
+
+                              // Render editable list of stops with ETA inputs
+                              return (
+                                <table style={{ width: '100%', fontSize: '0.8rem' }}>
+                                  <tbody>
+                                    {cached.map(rs => {
+                                      const departureDate = new Date(schedule.startTime)
+                                      departureDate.setMinutes(departureDate.getMinutes() + (rs.estimatedArrivalMinutes || 0))
+                                      return (
+                                        <tr key={rs.id}>
+                                          <td style={{ paddingRight: '0.5rem' }}><strong>{rs.stopOrder}.</strong></td>
+                                          <td style={{ flex: 1 }}>{rs.name}</td>
+                                          <td style={{ textAlign: 'right', color: '#666' }}>{formatTime(departureDate.toISOString())}</td>
+                                          <td style={{ paddingLeft: '0.5rem' }}>
+                                            <input
+                                              type="number"
+                                              value={rs.estimatedArrivalMinutes ?? 0}
+                                              onChange={e => {
+                                                const val = e.target.value === '' ? '' : Number(e.target.value)
+                                                setRouteStopsByLine(prev => ({
+                                                  ...prev,
+                                                  [lineId]: prev[lineId].map(item => item.id === rs.id ? { ...item, estimatedArrivalMinutes: val } : item)
+                                                }))
+                                              }}
+                                              style={{ width: '5rem' }}
+                                            />
+                                            <button type="button" onClick={async () => {
+                                              const newVal = Number((routeStopsByLine[lineId].find(i => i.id === rs.id)?.estimatedArrivalMinutes) || 0)
+                                              try {
+                                                await client.post(`/admin/bus-lines/${lineId}/stops`, {
+                                                  stopId: rs.stopId,
+                                                  stopOrder: rs.stopOrder,
+                                                  estimatedArrivalMinutes: newVal,
+                                                })
+                                                setMessage('ETA updated')
+                                                await loadRouteStops(lineId)
+                                                await loadSchedules()
+                                              } catch (err) {
+                                                setMessage('Error: ' + (err.response?.data?.error || err.message))
+                                              }
+                                            }} style={{ marginLeft: '0.5rem' }}>Save</button>
+                                          </td>
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                </table>
+                              )
+                            })()}
                           </div>
                         )}
 

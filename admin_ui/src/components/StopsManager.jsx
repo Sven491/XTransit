@@ -10,6 +10,8 @@ export default function StopsManager({ token, user }) {
   const [message, setMessage] = useState(null)
   const [isAdmin] = useState(Boolean(user?.userCode))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [editingStop, setEditingStop] = useState(null)
+
 
   const loadStops = async () => {
     try {
@@ -84,6 +86,15 @@ export default function StopsManager({ token, user }) {
                 Delete
               </button>
             )}
+            {isAdmin && (
+              <button
+                className="secondary"
+                onClick={() => setEditingStop(stop)}
+                style={{ marginTop: '0.5rem', width: '100%' }}
+              >
+                Edit
+              </button>
+            )}
           </article>
         ))}
       </div>
@@ -114,6 +125,40 @@ export default function StopsManager({ token, user }) {
                 Delete
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {editingStop && (
+        <div style={overlay}>
+          <div style={modal}>
+            <h3>Edit Stop</h3>
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              setMessage(null)
+              try {
+                const res = await client.patch(`/admin/stops/${editingStop.id}`, {
+                  name: editingStop.name,
+                  latitude: parseFloat(editingStop.latitude),
+                  longitude: parseFloat(editingStop.longitude),
+                })
+                setMessage('Stop updated')
+                setEditingStop(null)
+                await loadStops()
+              } catch (err) {
+                setMessage('Error: ' + (err.response?.data?.error || err.message))
+              }
+            }} className="stack-form">
+              <div className="form-row">
+                <input value={editingStop.name} onChange={e => setEditingStop({...editingStop, name: e.target.value})} />
+                <input value={editingStop.latitude} onChange={e => setEditingStop({...editingStop, latitude: e.target.value})} />
+                <input value={editingStop.longitude} onChange={e => setEditingStop({...editingStop, longitude: e.target.value})} />
+              </div>
+              <div className="form-row" style={{ marginTop: '1rem' }}>
+                <button className="secondary" type="button" onClick={() => setEditingStop(null)}>Cancel</button>
+                <button type="submit">Save</button>
+              </div>
+            </form>
           </div>
         </div>
       )}
