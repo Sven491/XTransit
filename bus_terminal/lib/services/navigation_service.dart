@@ -38,6 +38,13 @@ class NavigationService {
     required NavigationPoint end,
   }) async {
     try {
+      bool validCoord(double lat, double lon) {
+        return lat.isFinite && lon.isFinite && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+      }
+
+      if (!validCoord(start.latitude, start.longitude) || !validCoord(end.latitude, end.longitude)) {
+        throw Exception('Invalid coordinates for routing: start=(${start.latitude},${start.longitude}) end=(${end.latitude},${end.longitude})');
+      }
       // OSRM format: /route/v1/car/lon1,lat1;lon2,lat2
       final coordinates =
           '${start.longitude},${start.latitude};${end.longitude},${end.latitude}';
@@ -67,6 +74,16 @@ class NavigationService {
           start: start,
           end: end,
         );
+      } else if (response.statusCode == 400) {
+        // Bad request: OSRM couldn't parse coordinates. Fall back to a simple straight-line route.
+        try {
+          final distanceMeters = calculateDistance(start, end);
+          final durationSec = (distanceMeters / 11.111111).toInt(); // assume ~40 km/h -> 11.11 m/s
+          final leg = RouteLeg.fromPoints(points: [start, end], distance: distanceMeters, duration: durationSec, summary: 'Direct');
+          return NavigationRoute(start: start, end: end, legs: [leg], totalDistance: distanceMeters, totalDuration: durationSec);
+        } catch (e) {
+          throw Exception('Failed to get route (400) and fallback failed: ${e.toString()}');
+        }
       } else {
         throw Exception('Failed to get route: ${response.statusCode}');
       }
@@ -140,6 +157,14 @@ class NavigationService {
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode != 200) {
+        if (response.statusCode == 400) {
+          // fallback: return simple ordered stops route
+          final distanceMeters = _sumDistancesBetween(stops);
+          final durationSec = (distanceMeters / 11.111111).toInt();
+          final leg = RouteLeg.fromPoints(points: stops, distance: distanceMeters, duration: durationSec, summary: 'Fallback optimized trip');
+          final route = NavigationRoute(start: stops.first, end: stops.last, legs: [leg], totalDistance: distanceMeters, totalDuration: durationSec);
+          return OptimizedRouteResult(route: route, orderedStops: stops);
+        }
         throw Exception('Failed to get optimized route: ${response.statusCode}');
       }
 
@@ -255,12 +280,26 @@ class NavigationService {
             .toList();
 
         return routes;
+      } else if (response.statusCode == 400) {
+        // fallback: single straight-line route
+        final distanceMeters = calculateDistance(start, end);
+        final durationSec = (distanceMeters / 11.111111).toInt();
+        final leg = RouteLeg.fromPoints(points: [start, end], distance: distanceMeters, duration: durationSec, summary: 'Direct');
+        return [NavigationRoute(start: start, end: end, legs: [leg], totalDistance: distanceMeters, totalDuration: durationSec)];
       } else {
         throw Exception('Failed to get routes: ${response.statusCode}');
       }
     } catch (e) {
       throw Exception('Navigation error: $e');
     }
+  }
+
+  double _sumDistancesBetween(List<NavigationPoint> points) {
+    var total = 0.0;
+    for (var i = 0; i < points.length - 1; i++) {
+      total += calculateDistance(points[i], points[i + 1]);
+    }
+    return total;
   }
 
   /// Calculate straight-line distance between two points

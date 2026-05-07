@@ -424,18 +424,34 @@ export default function ScheduleMaker({ token, user }) {
                                           <td style={{ flex: 1 }}>{rs.name}</td>
                                           <td style={{ textAlign: 'right', color: '#666' }}>{formatTime(departureDate.toISOString())}</td>
                                           <td style={{ paddingLeft: '0.5rem' }}>
-                                            <input
-                                              type="number"
-                                              value={rs.estimatedArrivalMinutes ?? 0}
-                                              onChange={e => {
-                                                const val = e.target.value === '' ? '' : Number(e.target.value)
-                                                setRouteStopsByLine(prev => ({
-                                                  ...prev,
-                                                  [lineId]: prev[lineId].map(item => item.id === rs.id ? { ...item, estimatedArrivalMinutes: val } : item)
-                                                }))
-                                              }}
-                                              style={{ width: '5rem' }}
-                                            />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                              <input
+                                                type="range"
+                                                min="0"
+                                                max="240"
+                                                value={Number(rs.estimatedArrivalMinutes ?? 0)}
+                                                onChange={e => {
+                                                  const val = Number(e.target.value)
+                                                  setRouteStopsByLine(prev => ({
+                                                    ...prev,
+                                                    [lineId]: prev[lineId].map(item => item.id === rs.id ? { ...item, estimatedArrivalMinutes: val } : item)
+                                                  }))
+                                                }}
+                                                style={{ width: '8rem' }}
+                                              />
+                                              <input
+                                                type="number"
+                                                value={Number(rs.estimatedArrivalMinutes ?? 0)}
+                                                onChange={e => {
+                                                  const val = e.target.value === '' ? 0 : Number(e.target.value)
+                                                  setRouteStopsByLine(prev => ({
+                                                    ...prev,
+                                                    [lineId]: prev[lineId].map(item => item.id === rs.id ? { ...item, estimatedArrivalMinutes: val } : item)
+                                                  }))
+                                                }}
+                                                style={{ width: '4.5rem' }}
+                                              />
+                                            </div>
                                             <button type="button" onClick={async () => {
                                               const newVal = Number((routeStopsByLine[lineId].find(i => i.id === rs.id)?.estimatedArrivalMinutes) || 0)
                                               try {

@@ -116,8 +116,8 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
                         // Close the sheet and start navigation with provided stops
                         Navigator.of(sheetContext).pop();
 
-                        final routeObj = sched.Route(
-                          id: (svc.id is num) ? (svc.id as num).toInt() : int.tryParse(svc.id.toString()) ?? 0,
+                          final routeObj = sched.Route(
+                            id: svc.id,
                           busLine: sched.BusLine(
                             id: svc.busLineId,
                             lineNumber: svc.lineNumber,

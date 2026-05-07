@@ -73,8 +73,6 @@ class _NavigationScreenState extends State<NavigationScreen> {
       // Defensive: filter out invalid stops (missing/NaN coordinates) and deduplicate
       if (_stops != null) {
         _stops = _stops!
-            .where((s) => s != null)
-            .where((s) => s.latitude != null && s.longitude != null)
             .where((s) => s.latitude.isFinite && s.longitude.isFinite)
             .toList();
 
@@ -107,7 +105,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             _isLoading = false;
           });
 
-          _fitMapToRoute(optimized.route);
+          WidgetsBinding.instance.addPostFrameCallback((_) => _fitMapToRoute(optimized.route));
         }
 
         return;
@@ -157,12 +155,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
       if (mounted) {
         setState(() {
           _currentRoute = navRoute;
-          _alternativeRoutes = (alternatives ?? []).take(2).toList();
+            _alternativeRoutes = alternatives.take(2).toList();
           _isLoading = false;
         });
 
-        // Fit map to route bounds
-        _fitMapToRoute(navRoute);
+        // Fit map to route bounds after first frame so MapController is attached
+        WidgetsBinding.instance.addPostFrameCallback((_) => _fitMapToRoute(navRoute));
       }
     } catch (e) {
       if (mounted) {
@@ -265,7 +263,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         });
 
         if (navRoute != null) {
-          _fitMapToRoute(navRoute);
+          WidgetsBinding.instance.addPostFrameCallback((_) => _fitMapToRoute(navRoute));
         }
       }
     } catch (e) {
@@ -776,7 +774,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                             )
                           : ListView.separated(
                               itemCount: _stops!.length,
-                              separatorBuilder: (_, __) => const Divider(),
+                                separatorBuilder: (context, index) => const Divider(),
                               itemBuilder: (context, index) {
                                 final s = _stops![index];
                                 final color = _stopColor(index);
