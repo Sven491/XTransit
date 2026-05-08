@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/schedule.dart' as schedule;
 import '../screens/navigation_screen.dart';
+import '../services/schedule_service.dart';
 
 /// Route card widget showing route details
 class RouteCard extends StatelessWidget {
@@ -56,7 +57,14 @@ class RouteCard extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () {
+        onTap: () async {
+          try {
+            final scheduleService = ScheduleService();
+            await scheduleService.updateRouteStatus(route.id, 'in_progress');
+          } catch (_) {
+            // Ignore status update errors here; navigation should still open.
+          }
+
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => NavigationScreen(route: route),

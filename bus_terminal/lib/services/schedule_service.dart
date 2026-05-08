@@ -138,6 +138,29 @@ class ScheduleService {
     }
   }
 
+  /// Update schedule status for driver-facing schedule workflows.
+  Future<void> updateScheduleStatus(int scheduleId, String status) async {
+    try {
+      final headers = await _authService.getAuthHeaders();
+
+      final response = await http.patch(
+        Uri.parse('$_apiBaseUrl/driver/schedules/$scheduleId/status'),
+        headers: headers,
+        body: jsonEncode({'status': status}),
+      );
+
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        await _authService.logout();
+        throw UnauthorizedException('Session expired - Please login again');
+      } else if (response.statusCode != 200) {
+        throw Exception('Failed to update schedule status: ${response.statusCode}');
+      }
+    } catch (e) {
+      if (e is UnauthorizedException) rethrow;
+      throw Exception('Schedule status update error: $e');
+    }
+  }
+
   /// Get stops for a bus line
   Future<List<NavigationPoint>> getStops(int busLineId) async {
     try {

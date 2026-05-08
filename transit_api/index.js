@@ -1524,6 +1524,39 @@ app.patch('/routes/:routeId/status', authMiddleware, async (req, res) => {
 });
 
 // ============================================
+// DRIVER - Update schedule status
+// ============================================
+app.patch('/driver/schedules/:scheduleId/status', authMiddleware, async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const { status } = req.body;
+
+    const validStatuses = ['planned', 'in_progress', 'completed', 'cancelled', 'active'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'invalid_status' });
+    }
+
+    const normalizedStatus = status === 'active' ? 'in_progress' : status;
+
+    const result = await db.query(`
+      UPDATE transit.schedules
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING *
+    `, [normalizedStatus, scheduleId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    res.json({ schedule: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
 // ADMIN - Get drivers for scheduling
 // ============================================
 app.get('/admin/drivers', authMiddleware, adminMiddleware, async (req, res) => {
@@ -2142,7 +2175,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
         schedule.status = 'completed';
         schedule.endTime = actualPassedAt.toISOString();
       } else if (schedule.status === 'planned') {
-        schedule.status = 'active';
+        schedule.status = 'in_progress';
       }
 
       return res.json({
@@ -2233,7 +2266,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
     const totalStops = Number(totalsResult.rows[0]?.total_stops || 0);
     const passedStops = Number(totalsResult.rows[0]?.passed_stops || 0);
     const isCompleted = totalStops > 0 && passedStops >= totalStops;
-    const nextStatus = isCompleted ? 'completed' : 'active';
+    const nextStatus = isCompleted ? 'completed' : 'in_progress';
 
     await db.query(`
       UPDATE transit.schedules

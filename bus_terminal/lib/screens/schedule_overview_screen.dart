@@ -112,43 +112,54 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: () {
-                        // Close the sheet and start navigation with provided stops
-                        Navigator.of(sheetContext).pop();
+                      onPressed: () async {
+                        try {
+                          await _scheduleService.updateScheduleStatus(svc.id, 'in_progress');
+
+                          if (!mounted) return;
+
+                          // Close the sheet and start navigation with provided stops
+                          Navigator.of(sheetContext).pop();
 
                           final routeObj = sched.Route(
                             id: svc.id,
-                          busLine: sched.BusLine(
-                            id: svc.busLineId,
-                            lineNumber: svc.lineNumber,
-                            startStop: '',
-                            endStop: '',
-                            estimatedDuration: 0,
-                          ),
-                          busType: sched.BusType(
-                            id: svc.busId,
-                            name: svc.busName,
-                            seatCapacity: 0,
-                            licensePlate: '',
-                          ),
-                          startTime: svc.startTime,
-                          endTime: svc.endTime,
-                          status: svc.status,
-                        );
+                            busLine: sched.BusLine(
+                              id: svc.busLineId,
+                              lineNumber: svc.lineNumber,
+                              startStop: '',
+                              endStop: '',
+                              estimatedDuration: 0,
+                            ),
+                            busType: sched.BusType(
+                              id: svc.busId,
+                              name: svc.busName,
+                              seatCapacity: 0,
+                              licensePlate: '',
+                            ),
+                            startTime: svc.startTime,
+                            endTime: svc.endTime,
+                            status: 'in_progress',
+                          );
 
-                        final navStops = stops
-                                .map((s) => NavigationPoint(
-                                      latitude: s.latitude,
-                                      longitude: s.longitude,
-                                      name: s.name,
-                                    ))
-                                .toList();
+                          final navStops = stops
+                              .map((s) => NavigationPoint(
+                                    latitude: s.latitude,
+                                    longitude: s.longitude,
+                                    name: s.name,
+                                  ))
+                              .toList();
 
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => NavigationScreen(route: routeObj, initialStops: navStops),
-                          ),
-                        );
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => NavigationScreen(route: routeObj, initialStops: navStops),
+                            ),
+                          );
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Status bijwerken mislukt: $e')),
+                          );
+                        }
                       },
                       icon: const Icon(Icons.navigation),
                       label: const Text('Start route'),

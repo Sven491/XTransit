@@ -7,7 +7,7 @@ import '../models/navigation.dart';
 /// Navigation Service using OpenStreetMap
 class NavigationService {
   // OSRM (OpenStreetMap Routing Machine) - free public service
-  static const String _osrmBaseUrl = 'https://router.project-osrm.org/route/v1/car';
+  static const String _osrmBaseUrl = 'https://router.project-osrm.org/route/v1/driving';
 
   /// Get current device location
   Future<NavigationPoint?> getCurrentLocation() async {
@@ -45,7 +45,7 @@ class NavigationService {
       if (!validCoord(start.latitude, start.longitude) || !validCoord(end.latitude, end.longitude)) {
         throw Exception('Invalid coordinates for routing: start=(${start.latitude},${start.longitude}) end=(${end.latitude},${end.longitude})');
       }
-      // OSRM format: /route/v1/car/lon1,lat1;lon2,lat2
+      // OSRM format: /route/v1/driving/lon1,lat1;lon2,lat2
       final coordinates =
           '${start.longitude},${start.latitude};${end.longitude},${end.latitude}';
       final url =
@@ -152,7 +152,7 @@ class NavigationService {
           .map((stop) => '${stop.longitude},${stop.latitude}')
           .join(';');
       final url =
-          'https://router.project-osrm.org/trip/v1/car/$coordinates?overview=full&steps=true&geometries=geojson&source=first&destination=last&roundtrip=false';
+          'https://router.project-osrm.org/trip/v1/driving/$coordinates?overview=full&steps=true&geometries=geojson&source=first&destination=last&roundtrip=false';
 
       final response = await http.get(Uri.parse(url));
 
