@@ -2141,7 +2141,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
       const stop = (_mock.stops || []).find(s => Number(s.id) === Number(routeStop.stopId));
       const scheduledPassedAt = new Date(schedule.startTime);
       scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + (Number(routeStop.estimatedArrivalMinutes) || 0));
-      const delayMinutes = Math.round((actualPassedAt.getTime() - scheduledPassedAt.getTime()) / 60000);
+  
 
       const existingIndex = (_mock.scheduleStopProgress || []).findIndex(
         p => Number(p.scheduleId) === scheduleId && Number(p.stopOrder) === stopOrder
@@ -2222,7 +2222,6 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
     const routeStop = routeStopResult.rows[0];
     const scheduledPassedAt = new Date(schedule.start_time);
     scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + (Number(routeStop.estimated_arrival_minutes) || 0));
-    const delayMinutes = Math.round((actualPassedAt.getTime() - scheduledPassedAt.getTime()) / 60000);
 
     await db.query(`
       INSERT INTO transit.schedule_stop_progress (
@@ -2234,14 +2233,12 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
         estimated_arrival_minutes,
         scheduled_passed_at,
         actual_passed_at,
-        delay_minutes,
         marked_by_user_id
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
       ON CONFLICT (schedule_id, stop_order)
       DO UPDATE SET
         actual_passed_at = EXCLUDED.actual_passed_at,
-        delay_minutes = EXCLUDED.delay_minutes,
         marked_by_user_id = EXCLUDED.marked_by_user_id,
         created_at = NOW()
     `, [
@@ -2253,7 +2250,6 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
       Number(routeStop.estimated_arrival_minutes) || 0,
       scheduledPassedAt.toISOString(),
       actualPassedAt.toISOString(),
-      delayMinutes,
       Number(req.user?.userId) || null,
     ]);
 
@@ -2276,7 +2272,10 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
       WHERE id = $1
     `, [scheduleId, nextStatus, actualPassedAt.toISOString()]);
 
-    res.json({
+    // Calculate delay live
+    const delayMinutes = Math.round((actualPassedAt.getTime() - scheduledPassedAt.getTime()) / 60000);
+
+        res.json({
       scheduleId,
       stopOrder,
       status: nextStatus,
@@ -2408,7 +2407,7 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
       SELECT
         stop_order,
         actual_passed_at,
-        delay_minutes
+        scheduled_passed_at
       FROM transit.schedule_stop_progress
       WHERE schedule_id = $1
       ORDER BY stop_order ASC
@@ -2421,7 +2420,13 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
       ? progressResult.rows[progressResult.rows.length - 1]
       : null;
 
-    const currentDelayMinutes = latestProgress ? Number(latestProgress.delay_minutes) || 0 : 0;
+    // Calculate delay live from latest passed stop
+    let currentDelayMinutes = null;
+    if (latestProgress && latestProgress.actual_passed_at && latestProgress.scheduled_passed_at) {
+      const actualTime = new Date(latestProgress.actual_passed_at);
+      const scheduledTime = new Date(latestProgress.scheduled_passed_at);
+      currentDelayMinutes = Math.round((actualTime.getTime() - scheduledTime.getTime()) / 60000);
+    }
 
     const stops = routeStopsResult.rows.map(row => {
       const etaMinutes = Number(row.estimated_arrival_minutes) || 0;
@@ -2437,7 +2442,14 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
         estimatedArrivalMinutes: etaMinutes,
         scheduledPassedAt: scheduledPassedAt.toISOString(),
         actualPassedAt: progress?.actual_passed_at || null,
-        delayMinutes: progress ? Number(progress.delay_minutes) || 0 : null,
+        delayMinutes: (() => {
+          if (progress?.actual_passed_at && progress?.scheduled_passed_at) {
+            const actualTime = new Date(progress.actual_passed_at);
+            const scheduledTime = new Date(progress.scheduled_passed_at);
+            return Math.round((actualTime.getTime() - scheduledTime.getTime()) / 60000);
+          }
+          return null;
+        })(),
         status: progress ? 'passed' : 'pending',
       };
     });
