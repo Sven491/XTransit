@@ -17,12 +17,14 @@ const _mock = {
   busLines: [],
   fleetBuses: [],
   schedules: [],
+  scheduleStopProgress: [],
   drivers: [],
   nextStopId: 1,
   nextRouteStopId: 1,
   nextBusLineId: 1,
   nextFleetBusId: 1,
   nextScheduleId: 1,
+  nextScheduleStopProgressId: 1,
   nextDriverId: 1,
 };
 
@@ -247,6 +249,33 @@ function checkBusConflict(busId, startTime, endTime, weekdays, allSchedules, exc
     
     return doSchedulesDateOverlap(startTime, endTime, wkdays, sStart, sEnd, sWeekdays);
   });
+}
+
+async function ensureScheduleStopProgressTable() {
+  if (DEV_MOCK) return;
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS transit.schedule_stop_progress (
+      id BIGSERIAL PRIMARY KEY,
+      schedule_id INTEGER NOT NULL,
+      bus_line_id INTEGER NOT NULL,
+      stop_id INTEGER NOT NULL,
+      stop_order INTEGER NOT NULL,
+      stop_name TEXT,
+      estimated_arrival_minutes INTEGER NOT NULL DEFAULT 0,
+      scheduled_passed_at TIMESTAMPTZ NOT NULL,
+      actual_passed_at TIMESTAMPTZ NOT NULL,
+      delay_minutes INTEGER NOT NULL DEFAULT 0,
+      marked_by_user_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (schedule_id, stop_order)
+    )
+  `);
+
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_schedule_stop_progress_schedule_order
+    ON transit.schedule_stop_progress (schedule_id, stop_order)
+  `);
 }
 
 // ============================================
@@ -1943,6 +1972,376 @@ app.get('/schedules/:scheduleId/stops', async (req, res) => {
     });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// DRIVER - Mark stop as passed (updates realtime state)
+// ============================================
+app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware, async (req, res) => {
+  try {
+    const scheduleId = Number(req.params.scheduleId);
+    const stopOrder = Number(req.params.stopOrder);
+
+    if (!Number.isFinite(scheduleId) || !Number.isFinite(stopOrder) || stopOrder < 1) {
+      return res.status(400).json({ error: 'invalid_schedule_or_stop_order' });
+    }
+
+    const actualPassedAt = req.body?.actualPassedAt ? new Date(req.body.actualPassedAt) : new Date();
+    if (Number.isNaN(actualPassedAt.getTime())) {
+      return res.status(400).json({ error: 'invalid_actual_passed_at' });
+    }
+
+    if (DEV_MOCK) {
+      const schedule = (_mock.schedules || []).find(s => Number(s.id) === scheduleId);
+      if (!schedule) {
+        return res.status(404).json({ error: 'schedule_not_found' });
+      }
+
+      const routeStop = (_mock.routeStops || [])
+        .find(rs => Number(rs.busLineId) === Number(schedule.busLineId) && Number(rs.stopOrder) === stopOrder);
+
+      if (!routeStop) {
+        return res.status(404).json({ error: 'stop_not_found_for_schedule' });
+      }
+
+      const stop = (_mock.stops || []).find(s => Number(s.id) === Number(routeStop.stopId));
+      const scheduledPassedAt = new Date(schedule.startTime);
+      scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + (Number(routeStop.estimatedArrivalMinutes) || 0));
+      const delayMinutes = Math.round((actualPassedAt.getTime() - scheduledPassedAt.getTime()) / 60000);
+
+      const existingIndex = (_mock.scheduleStopProgress || []).findIndex(
+        p => Number(p.scheduleId) === scheduleId && Number(p.stopOrder) === stopOrder
+      );
+
+      const progressRow = {
+        id: existingIndex >= 0 ? _mock.scheduleStopProgress[existingIndex].id : _mock.nextScheduleStopProgressId++,
+        scheduleId,
+        busLineId: Number(schedule.busLineId),
+        stopId: Number(routeStop.stopId),
+        stopOrder,
+        stopName: stop?.name || routeStop.name || 'Unknown Stop',
+        estimatedArrivalMinutes: Number(routeStop.estimatedArrivalMinutes) || 0,
+        scheduledPassedAt: scheduledPassedAt.toISOString(),
+        actualPassedAt: actualPassedAt.toISOString(),
+        delayMinutes,
+        markedByUserId: Number(req.user?.userId) || null,
+        createdAt: new Date().toISOString(),
+      };
+
+      if (existingIndex >= 0) {
+        _mock.scheduleStopProgress[existingIndex] = progressRow;
+      } else {
+        _mock.scheduleStopProgress.push(progressRow);
+      }
+
+      const totalStops = (_mock.routeStops || []).filter(rs => Number(rs.busLineId) === Number(schedule.busLineId)).length;
+      const passedCount = (_mock.scheduleStopProgress || []).filter(p => Number(p.scheduleId) === scheduleId).length;
+
+      if (passedCount >= totalStops) {
+        schedule.status = 'completed';
+        schedule.endTime = actualPassedAt.toISOString();
+      } else if (schedule.status === 'planned') {
+        schedule.status = 'active';
+      }
+
+      return res.json({
+        scheduleId,
+        stopOrder,
+        status: schedule.status,
+        delayMinutes,
+        passedStops: passedCount,
+        totalStops,
+      });
+    }
+
+    await ensureScheduleStopProgressTable();
+
+    const scheduleResult = await db.query(`
+      SELECT s.id, s.bus_line_id, s.start_time, s.status
+      FROM transit.schedules s
+      WHERE s.id = $1
+    `, [scheduleId]);
+
+    if (scheduleResult.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    const schedule = scheduleResult.rows[0];
+
+    const routeStopResult = await db.query(`
+      SELECT
+        rs.stop_id,
+        rs.stop_order,
+        rs.estimated_arrival_minutes,
+        s.name AS stop_name
+      FROM transit.route_stops rs
+      JOIN transit.stops s ON s.id = rs.stop_id
+      WHERE rs.bus_line_id = $1
+        AND rs.stop_order = $2
+      LIMIT 1
+    `, [schedule.bus_line_id, stopOrder]);
+
+    if (routeStopResult.rows.length === 0) {
+      return res.status(404).json({ error: 'stop_not_found_for_schedule' });
+    }
+
+    const routeStop = routeStopResult.rows[0];
+    const scheduledPassedAt = new Date(schedule.start_time);
+    scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + (Number(routeStop.estimated_arrival_minutes) || 0));
+    const delayMinutes = Math.round((actualPassedAt.getTime() - scheduledPassedAt.getTime()) / 60000);
+
+    await db.query(`
+      INSERT INTO transit.schedule_stop_progress (
+        schedule_id,
+        bus_line_id,
+        stop_id,
+        stop_order,
+        stop_name,
+        estimated_arrival_minutes,
+        scheduled_passed_at,
+        actual_passed_at,
+        delay_minutes,
+        marked_by_user_id
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT (schedule_id, stop_order)
+      DO UPDATE SET
+        actual_passed_at = EXCLUDED.actual_passed_at,
+        delay_minutes = EXCLUDED.delay_minutes,
+        marked_by_user_id = EXCLUDED.marked_by_user_id,
+        created_at = NOW()
+    `, [
+      scheduleId,
+      Number(schedule.bus_line_id),
+      Number(routeStop.stop_id),
+      stopOrder,
+      routeStop.stop_name,
+      Number(routeStop.estimated_arrival_minutes) || 0,
+      scheduledPassedAt.toISOString(),
+      actualPassedAt.toISOString(),
+      delayMinutes,
+      Number(req.user?.userId) || null,
+    ]);
+
+    const totalsResult = await db.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM transit.route_stops WHERE bus_line_id = $1) AS total_stops,
+        (SELECT COUNT(*)::int FROM transit.schedule_stop_progress WHERE schedule_id = $2) AS passed_stops
+    `, [schedule.bus_line_id, scheduleId]);
+
+    const totalStops = Number(totalsResult.rows[0]?.total_stops || 0);
+    const passedStops = Number(totalsResult.rows[0]?.passed_stops || 0);
+    const isCompleted = totalStops > 0 && passedStops >= totalStops;
+    const nextStatus = isCompleted ? 'completed' : 'active';
+
+    await db.query(`
+      UPDATE transit.schedules
+      SET
+        status = $2,
+        end_time = CASE WHEN $2 = 'completed' THEN $3 ELSE end_time END
+      WHERE id = $1
+    `, [scheduleId, nextStatus, actualPassedAt.toISOString()]);
+
+    res.json({
+      scheduleId,
+      stopOrder,
+      status: nextStatus,
+      delayMinutes,
+      passedStops,
+      totalStops,
+    });
+  } catch (err) {
+    console.error('POST /driver/schedules/:scheduleId/stops/:stopOrder/passed error:', err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// PUBLIC - Live progress for passengers
+// ============================================
+app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
+  try {
+    const scheduleId = Number(req.params.scheduleId);
+    if (!Number.isFinite(scheduleId)) {
+      return res.status(400).json({ error: 'invalid_schedule_id' });
+    }
+
+    if (DEV_MOCK) {
+      const schedule = (_mock.schedules || []).find(s => Number(s.id) === scheduleId);
+      if (!schedule) {
+        return res.status(404).json({ error: 'schedule_not_found' });
+      }
+
+      const busLine = (_mock.busLines || []).find(bl => Number(bl.id) === Number(schedule.busLineId));
+      const routeStops = (_mock.routeStops || [])
+        .filter(rs => Number(rs.busLineId) === Number(schedule.busLineId))
+        .sort((a, b) => Number(a.stopOrder) - Number(b.stopOrder));
+
+      const progressEvents = (_mock.scheduleStopProgress || [])
+        .filter(p => Number(p.scheduleId) === scheduleId)
+        .sort((a, b) => Number(a.stopOrder) - Number(b.stopOrder));
+
+      const progressByOrder = new Map(progressEvents.map(p => [Number(p.stopOrder), p]));
+      const latestProgress = progressEvents.length > 0 ? progressEvents[progressEvents.length - 1] : null;
+      const currentDelayMinutes = latestProgress ? Number(latestProgress.delayMinutes) || 0 : 0;
+
+      const stops = routeStops.map(rs => {
+        const stop = (_mock.stops || []).find(s => Number(s.id) === Number(rs.stopId));
+        const scheduledTime = new Date(schedule.startTime);
+        scheduledTime.setMinutes(scheduledTime.getMinutes() + (Number(rs.estimatedArrivalMinutes) || 0));
+        const progress = progressByOrder.get(Number(rs.stopOrder));
+
+        return {
+          stopId: Number(rs.stopId),
+          stopOrder: Number(rs.stopOrder),
+          stopName: stop?.name || rs.name || 'Unknown Stop',
+          estimatedArrivalMinutes: Number(rs.estimatedArrivalMinutes) || 0,
+          scheduledPassedAt: scheduledTime.toISOString(),
+          actualPassedAt: progress?.actualPassedAt || null,
+          delayMinutes: progress ? Number(progress.delayMinutes) || 0 : null,
+          status: progress ? 'passed' : 'pending',
+        };
+      });
+
+      const passedStops = stops.filter(s => s.status === 'passed');
+      const nextStop = stops.find(s => s.status === 'pending') || null;
+      const driverState = passedStops.length === 0
+        ? 'not_started'
+        : (passedStops.length >= stops.length ? 'completed' : 'en_route');
+
+      return res.json({
+        schedule: {
+          id: scheduleId,
+          lineNumber: Number(busLine?.lineNumber || 0),
+          startStop: busLine?.startStop || null,
+          endStop: busLine?.endStop || null,
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          status: schedule.status,
+        },
+        driverState,
+        currentDelayMinutes,
+        passedStopCount: passedStops.length,
+        totalStopCount: stops.length,
+        nextStop: nextStop
+          ? {
+              ...nextStop,
+              predictedPassedAt: new Date(new Date(nextStop.scheduledPassedAt).getTime() + currentDelayMinutes * 60000).toISOString(),
+            }
+          : null,
+        stops,
+        updatedAt: latestProgress?.actualPassedAt || null,
+      });
+    }
+
+    await ensureScheduleStopProgressTable();
+
+    const scheduleResult = await db.query(`
+      SELECT
+        s.id,
+        s.bus_line_id,
+        s.start_time,
+        s.end_time,
+        s.status,
+        bl.line_number,
+        bl.start_stop,
+        bl.end_stop
+      FROM transit.schedules s
+      JOIN transit.bus_lines bl ON bl.id = s.bus_line_id
+      WHERE s.id = $1
+      LIMIT 1
+    `, [scheduleId]);
+
+    if (scheduleResult.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    const schedule = scheduleResult.rows[0];
+
+    const routeStopsResult = await db.query(`
+      SELECT
+        rs.stop_id,
+        rs.stop_order,
+        rs.estimated_arrival_minutes,
+        s.name AS stop_name
+      FROM transit.route_stops rs
+      JOIN transit.stops s ON s.id = rs.stop_id
+      WHERE rs.bus_line_id = $1
+      ORDER BY rs.stop_order ASC
+    `, [schedule.bus_line_id]);
+
+    const progressResult = await db.query(`
+      SELECT
+        stop_order,
+        actual_passed_at,
+        delay_minutes
+      FROM transit.schedule_stop_progress
+      WHERE schedule_id = $1
+      ORDER BY stop_order ASC
+    `, [scheduleId]);
+
+    const progressByOrder = new Map(
+      progressResult.rows.map(row => [Number(row.stop_order), row])
+    );
+    const latestProgress = progressResult.rows.length > 0
+      ? progressResult.rows[progressResult.rows.length - 1]
+      : null;
+
+    const currentDelayMinutes = latestProgress ? Number(latestProgress.delay_minutes) || 0 : 0;
+
+    const stops = routeStopsResult.rows.map(row => {
+      const etaMinutes = Number(row.estimated_arrival_minutes) || 0;
+      const scheduledPassedAt = new Date(schedule.start_time);
+      scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + etaMinutes);
+
+      const progress = progressByOrder.get(Number(row.stop_order));
+
+      return {
+        stopId: Number(row.stop_id),
+        stopOrder: Number(row.stop_order),
+        stopName: row.stop_name,
+        estimatedArrivalMinutes: etaMinutes,
+        scheduledPassedAt: scheduledPassedAt.toISOString(),
+        actualPassedAt: progress?.actual_passed_at || null,
+        delayMinutes: progress ? Number(progress.delay_minutes) || 0 : null,
+        status: progress ? 'passed' : 'pending',
+      };
+    });
+
+    const passedStops = stops.filter(s => s.status === 'passed');
+    const nextStop = stops.find(s => s.status === 'pending') || null;
+
+    const driverState = passedStops.length === 0
+      ? 'not_started'
+      : (passedStops.length >= stops.length ? 'completed' : 'en_route');
+
+    res.json({
+      schedule: {
+        id: Number(schedule.id),
+        lineNumber: Number(schedule.line_number),
+        startStop: schedule.start_stop,
+        endStop: schedule.end_stop,
+        startTime: schedule.start_time,
+        endTime: schedule.end_time,
+        status: schedule.status,
+      },
+      driverState,
+      currentDelayMinutes,
+      passedStopCount: passedStops.length,
+      totalStopCount: stops.length,
+      nextStop: nextStop
+        ? {
+            ...nextStop,
+            predictedPassedAt: new Date(new Date(nextStop.scheduledPassedAt).getTime() + currentDelayMinutes * 60000).toISOString(),
+          }
+        : null,
+      stops,
+      updatedAt: latestProgress?.actual_passed_at || null,
+    });
+  } catch (err) {
+    console.error('GET /public/schedules/:scheduleId/progress error:', err);
     res.status(500).json({ error: 'internal_error', details: err.message });
   }
 });

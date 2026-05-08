@@ -177,4 +177,35 @@ class ScheduleService {
       throw Exception('Get stops error: $e');
     }
   }
+
+  /// Mark a schedule stop as passed by the driver.
+  Future<void> markScheduleStopPassed({
+    required int scheduleId,
+    required int stopOrder,
+    DateTime? actualPassedAt,
+  }) async {
+    try {
+      final headers = await _authService.getAuthHeaders();
+
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/driver/schedules/$scheduleId/stops/$stopOrder/passed'),
+        headers: headers,
+        body: jsonEncode({
+          if (actualPassedAt != null) 'actualPassedAt': actualPassedAt.toIso8601String(),
+        }),
+      );
+
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        await _authService.logout();
+        throw UnauthorizedException('Session expired - Please login again');
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception('Failed to mark stop as passed: ${response.statusCode}');
+      }
+    } catch (e) {
+      if (e is UnauthorizedException) rethrow;
+      throw Exception('Mark stop passed error: $e');
+    }
+  }
 }

@@ -92,20 +92,34 @@ class _NavigationScreenState extends State<NavigationScreen> {
       late NavigationPoint endPoint;
 
       if (_stops != null && _stops!.length >= 2) {
-        final optimized = await _navigationService.getOptimizedRouteThroughStops(stops: _stops!);
-        _stops = optimized.orderedStops;
+        final hasScheduleStops = widget.initialStops != null;
+
+        if (!hasScheduleStops) {
+          final optimized = await _navigationService.getOptimizedRouteThroughStops(stops: _stops!);
+          _stops = optimized.orderedStops;
+          if (mounted) {
+            setState(() {
+              _currentRoute = optimized.route;
+              _alternativeRoutes = null;
+              _isLoading = false;
+            });
+            WidgetsBinding.instance.addPostFrameCallback((_) => _fitMapToRoute(optimized.route));
+          }
+          return;
+        }
+
+        final navRoute = await _navigationService.getRouteThroughStops(stops: _stops!);
         startPoint = _stops!.first;
         endPoint = _stops!.last;
 
         if (mounted) {
           setState(() {
-            _currentRoute = optimized.route;
-            // limit alternatives to first two to avoid rendering many polylines
+            _currentRoute = navRoute;
             _alternativeRoutes = null;
             _isLoading = false;
           });
 
-          WidgetsBinding.instance.addPostFrameCallback((_) => _fitMapToRoute(optimized.route));
+          WidgetsBinding.instance.addPostFrameCallback((_) => _fitMapToRoute(navRoute));
         }
 
         return;
@@ -285,6 +299,23 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Future<void> _markStopCompleted(int index) async {
     if (_stops == null || _stops!.isEmpty) return;
     if (index < 0 || index >= _stops!.length) return;
+
+    // When this screen is opened from schedule overview, route.id maps to scheduleId.
+    if (widget.initialStops != null) {
+      try {
+        await _scheduleService.markScheduleStopPassed(
+          scheduleId: widget.route.id,
+          stopOrder: index + 1,
+          actualPassedAt: DateTime.now(),
+        );
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'Stop update mislukt: ${e.toString().replaceAll('Exception: ', '')}';
+          });
+        }
+      }
+    }
 
     setState(() {
       _completedStops.add(index);
