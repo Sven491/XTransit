@@ -62,6 +62,13 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
     }
   }
 
+  void _moveDay(int deltaDays) {
+    setState(() {
+      _selectedDate = _selectedDate.add(Duration(days: deltaDays));
+      _scheduleFuture = _scheduleService.getDailySchedule(_selectedDate);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -140,18 +147,51 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
                   const SizedBox(height: 14),
                   Align(
                     alignment: Alignment.centerRight,
-                    child: SizedBox(
-                      height: 48,
-                      child: OutlinedButton.icon(
-                        onPressed: _selectDate,
-                        icon: const Icon(Icons.calendar_today, size: 18),
-                        label: const Text('Wijzig'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: BorderSide(color: Colors.white.withOpacity(0.28)),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.end,
+                      children: [
+                        SizedBox(
+                          height: 48,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _moveDay(-1),
+                            icon: const Icon(Icons.chevron_left, size: 18),
+                            label: const Text('Vorige dag'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: BorderSide(color: Colors.white.withOpacity(0.28)),
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                            ),
+                          ),
                         ),
-                      ),
+                        SizedBox(
+                          height: 48,
+                          child: OutlinedButton.icon(
+                            onPressed: _selectDate,
+                            icon: const Icon(Icons.calendar_today, size: 18),
+                            label: const Text('Kies datum'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: BorderSide(color: Colors.white.withOpacity(0.28)),
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          height: 48,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _moveDay(1),
+                            icon: const Icon(Icons.chevron_right, size: 18),
+                            label: const Text('Volgende dag'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: BorderSide(color: Colors.white.withOpacity(0.28)),
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -244,7 +284,8 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
                     );
                   }
 
-                  final routes = snapshot.data!.routes;
+                  final routes = [...snapshot.data!.routes]
+                    ..sort((a, b) => a.startTime.compareTo(b.startTime));
                   final scheduledRoutes = routes.where((r) => r.status == 'scheduled').toList();
                   final inProgressRoutes = routes.where((r) => r.status == 'in_progress').toList();
                   final completedRoutes = routes.where((r) => r.status == 'completed').toList();
