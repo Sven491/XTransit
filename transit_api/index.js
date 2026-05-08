@@ -1617,10 +1617,54 @@ app.get('/admin/drivers', authMiddleware, adminMiddleware, async (req, res) => {
 app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (DEV_MOCK) {
-      const schedules = (_mock.schedules || []).map(s => ({
-        ...s,
-        departureTimes: calculateDepartureTimes(s.startTime, s.busLineId, _mock),
-      }));
+      // Generate recurring schedules for mock data too
+      let expandedMockSchedules = [];
+      
+      const generateRecurringInstancesForMock = (template) => {
+        if (!template.weekdays || template.weekdays.length === 0) {
+          return [template];
+        }
+
+        const instances = [];
+        const templateDate = new Date(template.startTime);
+        const templateDayOfWeek = templateDate.getDay();
+        const sortedWeekdays = [...template.weekdays].sort();
+
+        // Generate for 52 weeks
+        for (let week = 0; week < 52; week++) {
+          for (const targetWeekday of sortedWeekdays) {
+            const scheduleDate = new Date(templateDate);
+            let daysOffset = (targetWeekday - templateDayOfWeek + 7) % 7;
+            let totalDays = week * 7 + daysOffset;
+            
+            scheduleDate.setDate(scheduleDate.getDate() + totalDays);
+            
+            const endDate = new Date(scheduleDate);
+            endDate.setMinutes(endDate.getMinutes() + 60);
+
+            instances.push({
+              ...template,
+              startTime: scheduleDate.toISOString(),
+              endTime: endDate.toISOString(),
+              isRecurringInstance: true,
+              templateId: template.id,
+            });
+          }
+        }
+        return instances;
+      };
+
+      for (const s of (_mock.schedules || [])) {
+        expandedMockSchedules.push(...generateRecurringInstancesForMock(s));
+      }
+
+      const schedules = expandedMockSchedules
+        .map(s => ({
+          ...s,
+          departureTimes: calculateDepartureTimes(s.startTime, s.busLineId, _mock),
+        }))
+        .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+      
       return res.json({ schedules });
     }
 
@@ -1691,7 +1735,70 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
       }
     }
 
-    const schedules = result.rows.map(row => {
+    // Helper function to generate schedules from a recurring template
+    const generateRecurringInstances = (templateRow, routeStops) => {
+      const weekdays = parseWeekdaysValue(templateRow.weekdays);
+      
+      // If no weekdays, return single schedule
+      if (!weekdays || weekdays.length === 0) {
+        return [templateRow];
+      }
+
+      const instances = [];
+      const templateDate = new Date(templateRow.start_time);
+      const templateDayOfWeek = templateDate.getDay();
+      const sortedWeekdays = [...weekdays].sort();
+      
+      // Generate instances for 52 weeks ahead
+      for (let week = 0; week < 52; week++) {
+        for (const targetWeekday of sortedWeekdays) {
+          // Calculate days from template start to this target weekday
+          let daysOffset = (targetWeekday - templateDayOfWeek + 7) % 7;
+          
+          // For first week, if daysOffset is 0, include template date
+          // Otherwise, advance by weeks until we hit the first occurrence
+          let totalDays = daysOffset;
+          if (week > 0) {
+            totalDays = week * 7 + daysOffset;
+          } else if (daysOffset === 0) {
+            totalDays = 0;
+          } else {
+            // First week: if weekday hasn't occurred yet, skip to next week
+            totalDays = daysOffset;
+          }
+          
+          const scheduleDate = new Date(templateDate);
+          scheduleDate.setDate(scheduleDate.getDate() + totalDays);
+          
+          const endDate = new Date(scheduleDate);
+          endDate.setMinutes(endDate.getMinutes() + (templateRow.estimated_duration_minutes || 60));
+
+          instances.push({
+            ...templateRow,
+            start_time: scheduleDate.toISOString(),
+            end_time: endDate.toISOString(),
+            is_recurring_instance: true,
+            template_id: templateRow.id,
+          });
+        }
+      }
+
+      return instances;
+    };
+
+    let expandedSchedules = [];
+    for (const row of result.rows) {
+      const weekdays = parseWeekdaysValue(row.weekdays);
+      if (weekdays && weekdays.length > 0) {
+        // This is a recurring template - expand it
+        expandedSchedules.push(...generateRecurringInstances(row, routeStopsByLine.get(Number(row.bus_line_id)) || []));
+      } else {
+        // Single schedule
+        expandedSchedules.push(row);
+      }
+    }
+
+    const schedules = expandedSchedules.map(row => {
       const weekdays = parseWeekdaysValue(row.weekdays);
       const busLineId = Number(row.bus_line_id);
       const lineRouteStops = routeStopsByLine.get(busLineId) || [];
@@ -1726,8 +1833,10 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
         busName: row.bus_name,
         licensePlate: row.license_plate,
         createdAt: row.created_at,
+        isRecurringInstance: row.is_recurring_instance || false,
+        templateId: row.template_id || null,
       };
-    });
+    }).sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
     res.json({ schedules });
   } catch (err) {
