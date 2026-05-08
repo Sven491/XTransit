@@ -21,6 +21,7 @@ export default function ScheduleMaker({ token, user }) {
   const [selectedLine, setSelectedLine] = useState('')
   const [selectedBus, setSelectedBus] = useState('')
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
+  const [overviewDate, setOverviewDate] = useState(new Date().toISOString().split('T')[0])
   const [startTime, setStartTime] = useState('08:00')
   const [driverId, setDriverId] = useState('')
   const [selectedWeekdays, setSelectedWeekdays] = useState([])
@@ -226,7 +227,15 @@ export default function ScheduleMaker({ token, user }) {
   const filteredSchedules = selectedDriverFilter
     ? schedules.filter(s => String(s.driverId) === String(selectedDriverFilter))
     : schedules
-  const schedulesBySlot = groupSchedulesByTimeSlot(filteredSchedules, timeSlots)
+  const overviewSchedules = filteredSchedules.filter(schedule => {
+    if (!overviewDate) return true
+    const scheduleDate = new Date(schedule.startTime)
+    const selectedOverview = new Date(`${overviewDate}T00:00:00`)
+    return scheduleDate.getFullYear() === selectedOverview.getFullYear()
+      && scheduleDate.getMonth() === selectedOverview.getMonth()
+      && scheduleDate.getDate() === selectedOverview.getDate()
+  })
+  const schedulesBySlot = groupSchedulesByTimeSlot(overviewSchedules, timeSlots)
 
   return (
     <section className="card">
@@ -326,6 +335,16 @@ export default function ScheduleMaker({ token, user }) {
       )}
 
       <h3 style={{ marginTop: '2rem' }}>Timetable</h3>
+      <div className="form-row" style={{ marginBottom: '1rem' }}>
+        <input
+          type="date"
+          value={overviewDate}
+          onChange={e => setOverviewDate(e.target.value)}
+        />
+        <button type="button" onClick={() => setOverviewDate(new Date().toISOString().split('T')[0])}>
+          Vandaag
+        </button>
+      </div>
       <div className="timetable-container">
         <table className="timetable">
           <thead>

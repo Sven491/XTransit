@@ -67,6 +67,7 @@ class AppTheme {
       brightness: Brightness.light,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: const Color(0xFFF1F5F9),
+      materialTapTargetSize: MaterialTapTargetSize.padded,
       textTheme: _textTheme(colorScheme),
       appBarTheme: AppBarTheme(
         backgroundColor: colorScheme.surface,
@@ -138,6 +139,7 @@ class AppTheme {
       brightness: Brightness.dark,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: const Color(0xFF0B1220),
+      materialTapTargetSize: MaterialTapTargetSize.padded,
       textTheme: _textTheme(colorScheme).apply(bodyColor: Colors.white, displayColor: Colors.white),
       appBarTheme: AppBarTheme(
         backgroundColor: const Color(0xFF0B1220),

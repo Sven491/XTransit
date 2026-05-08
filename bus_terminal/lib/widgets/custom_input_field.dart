@@ -82,15 +82,18 @@ class _CustomInputFieldState extends State<CustomInputField> {
               borderSide: BorderSide(color: colorScheme.primary, width: 2),
             ),
             suffixIcon: widget.obscureText
-                ? GestureDetector(
-                    onTap: () {
+                ? IconButton(
+                    tooltip: _obscureText ? 'Toon wachtwoord' : 'Verberg wachtwoord',
+                    onPressed: () {
                       setState(() => _obscureText = !_obscureText);
                     },
-                    child: Icon(
+                    icon: Icon(
                       _obscureText ? Icons.visibility_off : Icons.visibility,
                       size: 28, // Larger icon for accessibility
                       color: colorScheme.primary,
                     ),
+                    splashRadius: 24,
+                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                   )
                 : null,
           ),

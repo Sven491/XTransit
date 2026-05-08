@@ -5,11 +5,16 @@ on:
     branches:
       - main
       - develop
+    paths:
+      - 'auth_api/**'
+      - 'employee_api/**'
+      - 'transit_api/**'
+      - 'admin_ui/**'
+      - '.github/workflows/docker-build.yml'
   pull_request:
     branches:
       - main
       - develop
-  workflow_dispatch:
 
 env:
   # GitHub Container Registry
