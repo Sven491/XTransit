@@ -32,6 +32,9 @@ AGENTS.md
 scripts/private/
 scripts/*.local.*
 
+# Private timetable note
+transit_api/LOCAL_BUS_TIMETABLE_README.md
+
 # Local files
 *.local
 .local

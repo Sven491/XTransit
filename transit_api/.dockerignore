@@ -41,3 +41,6 @@ build/
 dist/
 coverage/
 .nyc_output/
+
+# Private timetable note
+LOCAL_BUS_TIMETABLE_README.md

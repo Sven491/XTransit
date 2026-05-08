@@ -28,6 +28,9 @@ scripts/private/
 scripts/*.local.*
 scripts/.env
 
+# Private timetable note
+transit_api/LOCAL_BUS_TIMETABLE_README.md
+
 # Runtime files
 *.log
 *.sqlite3

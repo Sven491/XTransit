@@ -1498,20 +1498,67 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
           LEFT JOIN workers.employees e ON s.driver_id = e.id
           ORDER BY s.start_time DESC`);
 
+    const lineIds = Array.from(
+      new Set(
+        result.rows
+          .map(row => Number(row.bus_line_id))
+          .filter(Number.isFinite)
+      )
+    );
+
+    const routeStopsByLine = new Map();
+    if (lineIds.length > 0) {
+      const routeStopsResult = await db.query(`
+        SELECT
+          rs.bus_line_id,
+          rs.stop_id,
+          rs.stop_order,
+          rs.estimated_arrival_minutes,
+          s.name AS stop_name
+        FROM transit.route_stops rs
+        JOIN transit.stops s ON s.id = rs.stop_id
+        WHERE rs.bus_line_id = ANY($1::int[])
+        ORDER BY rs.bus_line_id ASC, rs.stop_order ASC
+      `, [lineIds]);
+
+      for (const row of routeStopsResult.rows) {
+        const busLineId = Number(row.bus_line_id);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
+        }
+        routeStopsByLine.get(busLineId).push(row);
+      }
+    }
+
     const schedules = result.rows.map(row => {
-      const departureTimes = calculateDepartureTimes(row.start_time, row.bus_line_id, _mock);
-      
       const weekdays = parseWeekdaysValue(row.weekdays);
-      
+      const busLineId = Number(row.bus_line_id);
+      const lineRouteStops = routeStopsByLine.get(busLineId) || [];
+      const startDate = new Date(row.start_time);
+
+      const departureTimes = lineRouteStops.map(routeStop => {
+        const departureDate = new Date(startDate);
+        const etaMinutes = Number(routeStop.estimated_arrival_minutes) || 0;
+        departureDate.setMinutes(departureDate.getMinutes() + etaMinutes);
+
+        return {
+          order: Number(routeStop.stop_order),
+          stopId: Number(routeStop.stop_id),
+          stopName: routeStop.stop_name || 'Unknown Stop',
+          estimatedArrivalMinutes: etaMinutes,
+          departureTime: departureDate.toISOString(),
+        };
+      });
+
       return {
         id: Number(row.id),
-        busLineId: Number(row.bus_line_id),
+        busLineId,
         busId: Number(row.bus_id),
         driverId: row.driver_id !== null && row.driver_id !== undefined ? Number(row.driver_id) : null,
         driverName: row.driver_name || null,
         startTime: row.start_time,
         endTime: row.end_time,
-        weekdays: weekdays,
+        weekdays,
         departureTimes,
         status: row.status,
         lineNumber: row.line_number,

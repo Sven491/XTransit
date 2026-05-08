@@ -48,3 +48,6 @@ credentials.json
 # Temporary
 tmp/
 temp/
+
+# Private timetable note
+LOCAL_BUS_TIMETABLE_README.md
