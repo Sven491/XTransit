@@ -79,17 +79,18 @@ export default function ScheduleMaker({ token, user }) {
 
     try {
       const startDateTime = `${selectedDate}T${startTime}:00`
+      const normalizedWeekdays = [...selectedWeekdays].sort((a, b) => a - b)
 
       const res = await client.post('/admin/schedules', {
         busLineId: Number(selectedLine),
         busId: Number(selectedBus),
         driverId: driverId ? Number(driverId) : null,
         startTime: startDateTime,
-        weekdays: selectedWeekdays,
+        weekdays: normalizedWeekdays,
       })
 
-      const dayLabels = selectedWeekdays.length > 0
-        ? selectedWeekdays.map(d => WEEKDAYS[WEEKDAY_VALUES.indexOf(d)]).join(', ')
+      const dayLabels = normalizedWeekdays.length > 0
+        ? normalizedWeekdays.map(d => WEEKDAYS[WEEKDAY_VALUES.indexOf(d)]).join(', ')
         : 'eenmalig'
       setMessage(`Dienst aangemaakt: #${res.data.schedule.id} (${dayLabels})`)
       setSelectedLine('')
@@ -129,7 +130,8 @@ export default function ScheduleMaker({ token, user }) {
     if (!weekdayValues || weekdayValues.length === 0) return 'Eenmalig'
     if (weekdayValues.length === 7) return 'Dagelijks'
     const labels = weekdayValues
-      .sort()
+      .slice()
+      .sort((a, b) => a - b)
       .map(w => WEEKDAYS[WEEKDAY_VALUES.indexOf(w)])
     return labels.join(', ')
   }
@@ -278,9 +280,6 @@ export default function ScheduleMaker({ token, user }) {
                 </option>
               ))}
             </select>
-          </div>
-
-          <div className="form-row">
             <input
               type="date"
               value={selectedDate}
