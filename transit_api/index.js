@@ -573,17 +573,18 @@ async function ensureScheduleStopProgressTable() {
       stop_name TEXT,
       estimated_arrival_minutes INTEGER NOT NULL DEFAULT 0,
       scheduled_passed_at TIMESTAMPTZ NOT NULL,
+      scheduled_passed_date DATE NOT NULL,
       actual_passed_at TIMESTAMPTZ NOT NULL,
       delay_minutes INTEGER NOT NULL DEFAULT 0,
       marked_by_user_id INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (schedule_id, stop_order)
+      UNIQUE (schedule_id, stop_order, scheduled_passed_date)
     )
   `);
 
   await db.query(`
     CREATE INDEX IF NOT EXISTS idx_schedule_stop_progress_schedule_order
-    ON transit.schedule_stop_progress (schedule_id, stop_order)
+    ON transit.schedule_stop_progress (schedule_id, stop_order, scheduled_passed_date)
   `);
 }
 
@@ -2500,6 +2501,63 @@ app.get('/schedules/overview', async (req, res) => {
         .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
     }
 
+    // Enrich schedules with live progress for the occurrence date(s)
+    if (!DEV_MOCK && schedules.length > 0) {
+      const scheduleIds = [...new Set(schedules.map(s => Number(s.id)).filter(Number.isFinite))];
+      const occurrenceDates = [...new Set(schedules.map(s => toDateKey(s.startTime)).filter(Boolean))];
+
+      if (scheduleIds.length > 0 && occurrenceDates.length > 0) {
+        const progressRes = await db.query(`
+          SELECT schedule_id, scheduled_passed_date, stop_order, actual_passed_at, scheduled_passed_at, delay_minutes
+          FROM transit.schedule_stop_progress
+          WHERE schedule_id = ANY($1::int[]) AND scheduled_passed_date = ANY($2::date[])
+          ORDER BY schedule_id ASC, scheduled_passed_date ASC, actual_passed_at ASC
+        `, [scheduleIds, occurrenceDates]);
+
+        const progressByKey = new Map();
+        for (const row of progressRes.rows) {
+          const key = `${row.schedule_id}|${row.scheduled_passed_date}`;
+          if (!progressByKey.has(key)) progressByKey.set(key, []);
+          progressByKey.get(key).push(row);
+        }
+
+        schedules = schedules.map(s => {
+          const key = `${s.id}|${toDateKey(s.startTime)}`;
+          const progRows = progressByKey.get(key) || [];
+          const totalStops = (routeStopsByLine.get(Number(s.busLineId)) || []).length;
+          const passedStops = progRows.length;
+          let currentDelayMinutes = null;
+          if (progRows.length > 0) {
+            const latest = progRows[progRows.length - 1];
+            currentDelayMinutes = Number(latest.delay_minutes ?? latest.delay_minutes) || null;
+          }
+
+          const statusOverride = passedStops >= totalStops && totalStops > 0 ? 'completed' : (passedStops > 0 ? 'in_progress' : s.status);
+
+          return { ...s, status: statusOverride, passedStops, totalStops, currentDelayMinutes };
+        });
+      }
+    } else if (DEV_MOCK && schedules.length > 0) {
+      const mockProgress = _mock.scheduleStopProgress || [];
+      const progressByKey = new Map();
+      for (const p of mockProgress) {
+        const key = `${p.scheduleId}|${p.scheduledPassedDate}`;
+        if (!progressByKey.has(key)) progressByKey.set(key, []);
+        progressByKey.get(key).push(p);
+      }
+
+      schedules = schedules.map(s => {
+        const key = `${s.id}|${toDateKey(s.startTime)}`;
+        const progRows = progressByKey.get(key) || [];
+        const totalStops = (routeStopsByLine.get(Number(s.busLineId)) || []).length;
+        const passedStops = progRows.length;
+        const latest = progRows.length > 0 ? progRows[progRows.length - 1] : null;
+        const currentDelayMinutes = latest ? Number(latest.delayMinutes) || 0 : null;
+        const statusOverride = passedStops >= totalStops && totalStops > 0 ? 'completed' : (passedStops > 0 ? 'in_progress' : s.status);
+        return { ...s, status: statusOverride, passedStops, totalStops, currentDelayMinutes };
+      });
+    }
+
     res.json({
       date: overviewDateKey,
       summary: {
@@ -2696,7 +2754,11 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
       }
 
       const stop = (_mock.stops || []).find(s => Number(s.id) === Number(routeStop.stopId));
-      const scheduledPassedAt = new Date(schedule.startTime);
+      // Allow caller to specify which occurrence date this pertains to (for recurring templates)
+      const occurrenceDateKey = req.query.date || req.body.date || toDateKey(schedule.startTime);
+      const templateStart = new Date(schedule.startTime);
+      const scheduledPassedAt = new Date(`${occurrenceDateKey}T00:00:00`);
+      scheduledPassedAt.setHours(templateStart.getHours(), templateStart.getMinutes(), templateStart.getSeconds(), templateStart.getMilliseconds());
       scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + (Number(routeStop.estimatedArrivalMinutes) || 0));
   
 
@@ -2713,6 +2775,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
         stopName: stop?.name || routeStop.name || 'Unknown Stop',
         estimatedArrivalMinutes: Number(routeStop.estimatedArrivalMinutes) || 0,
         scheduledPassedAt: scheduledPassedAt.toISOString(),
+        scheduledPassedDate: occurrenceDateKey,
         actualPassedAt: actualPassedAt.toISOString(),
         delayMinutes,
         markedByUserId: Number(req.user?.userId) || null,
@@ -2726,7 +2789,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
       }
 
       const totalStops = (_mock.routeStops || []).filter(rs => Number(rs.busLineId) === Number(schedule.busLineId)).length;
-      const passedCount = (_mock.scheduleStopProgress || []).filter(p => Number(p.scheduleId) === scheduleId).length;
+      const passedCount = (_mock.scheduleStopProgress || []).filter(p => Number(p.scheduleId) === scheduleId && p.scheduledPassedDate === occurrenceDateKey).length;
 
       if (passedCount >= totalStops) {
         schedule.status = 'completed';
@@ -2742,6 +2805,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
         delayMinutes,
         passedStops: passedCount,
         totalStops,
+        occurrenceDate: occurrenceDateKey,
       });
     }
 
@@ -2777,7 +2841,11 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
     }
 
     const routeStop = routeStopResult.rows[0];
-    const scheduledPassedAt = new Date(schedule.start_time);
+    // Determine occurrence date (for recurring templates callers can pass ?date=YYYY-MM-DD or body.date)
+    const occurrenceDateKey = req.query.date || req.body.date || toDateKey(schedule.start_time);
+    const templateStart = new Date(schedule.start_time);
+    const scheduledPassedAt = new Date(`${occurrenceDateKey}T00:00:00`);
+    scheduledPassedAt.setHours(templateStart.getHours(), templateStart.getMinutes(), templateStart.getSeconds(), templateStart.getMilliseconds());
     scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + (Number(routeStop.estimated_arrival_minutes) || 0));
 
     await db.query(`
@@ -2789,11 +2857,12 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
         stop_name,
         estimated_arrival_minutes,
         scheduled_passed_at,
+        scheduled_passed_date,
         actual_passed_at,
         marked_by_user_id
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      ON CONFLICT (schedule_id, stop_order)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT (schedule_id, stop_order, scheduled_passed_date)
       DO UPDATE SET
         actual_passed_at = EXCLUDED.actual_passed_at,
         marked_by_user_id = EXCLUDED.marked_by_user_id,
@@ -2806,6 +2875,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
       routeStop.stop_name,
       Number(routeStop.estimated_arrival_minutes) || 0,
       scheduledPassedAt.toISOString(),
+      occurrenceDateKey,
       actualPassedAt.toISOString(),
       Number(req.user?.userId) || null,
     ]);
@@ -2813,8 +2883,8 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
     const totalsResult = await db.query(`
       SELECT
         (SELECT COUNT(*)::int FROM transit.route_stops WHERE bus_line_id = $1) AS total_stops,
-        (SELECT COUNT(*)::int FROM transit.schedule_stop_progress WHERE schedule_id = $2) AS passed_stops
-    `, [schedule.bus_line_id, scheduleId]);
+        (SELECT COUNT(*)::int FROM transit.schedule_stop_progress WHERE schedule_id = $2 AND scheduled_passed_date = $3) AS passed_stops
+    `, [schedule.bus_line_id, scheduleId, occurrenceDateKey]);
 
     const totalStops = Number(totalsResult.rows[0]?.total_stops || 0);
     const passedStops = Number(totalsResult.rows[0]?.passed_stops || 0);
@@ -2867,17 +2937,23 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
         .filter(rs => Number(rs.busLineId) === Number(schedule.busLineId))
         .sort((a, b) => Number(a.stopOrder) - Number(b.stopOrder));
 
-      const progressEvents = (_mock.scheduleStopProgress || [])
-        .filter(p => Number(p.scheduleId) === scheduleId)
-        .sort((a, b) => Number(a.stopOrder) - Number(b.stopOrder));
+      const mockProgressDate = req.query.date || req.query.occurrenceDate || null;
+      let progressEvents = (_mock.scheduleStopProgress || []).filter(p => Number(p.scheduleId) === scheduleId);
+      if (mockProgressDate) {
+        progressEvents = progressEvents.filter(p => p.scheduledPassedDate === mockProgressDate);
+      }
+      progressEvents = progressEvents.sort((a, b) => Number(a.stopOrder) - Number(b.stopOrder));
 
       const progressByOrder = new Map(progressEvents.map(p => [Number(p.stopOrder), p]));
       const latestProgress = progressEvents.length > 0 ? progressEvents[progressEvents.length - 1] : null;
       const currentDelayMinutes = latestProgress ? Number(latestProgress.delayMinutes) || 0 : 0;
 
+      const occurrenceDateKey = req.query.date || req.query.occurrenceDate || toDateKey(schedule.startTime);
       const stops = routeStops.map(rs => {
         const stop = (_mock.stops || []).find(s => Number(s.id) === Number(rs.stopId));
-        const scheduledTime = new Date(schedule.startTime);
+        const templateStart = new Date(schedule.startTime);
+        const scheduledTime = new Date(`${occurrenceDateKey}T00:00:00`);
+        scheduledTime.setHours(templateStart.getHours(), templateStart.getMinutes(), templateStart.getSeconds(), templateStart.getMilliseconds());
         scheduledTime.setMinutes(scheduledTime.getMinutes() + (Number(rs.estimatedArrivalMinutes) || 0));
         const progress = progressByOrder.get(Number(rs.stopOrder));
 
@@ -2960,15 +3036,32 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
       ORDER BY rs.stop_order ASC
     `, [schedule.bus_line_id]);
 
-    const progressResult = await db.query(`
-      SELECT
-        stop_order,
-        actual_passed_at,
-        scheduled_passed_at
-      FROM transit.schedule_stop_progress
-      WHERE schedule_id = $1
-      ORDER BY stop_order ASC
-    `, [scheduleId]);
+    // Allow querying progress for a specific occurrence date (recurring templates)
+    const progressDate = req.query.date || req.query.occurrenceDate || null;
+    let progressResult;
+    if (progressDate) {
+      progressResult = await db.query(`
+        SELECT
+          stop_order,
+          actual_passed_at,
+          scheduled_passed_at,
+          scheduled_passed_date
+        FROM transit.schedule_stop_progress
+        WHERE schedule_id = $1 AND scheduled_passed_date = $2
+        ORDER BY stop_order ASC
+      `, [scheduleId, progressDate]);
+    } else {
+      progressResult = await db.query(`
+        SELECT
+          stop_order,
+          actual_passed_at,
+          scheduled_passed_at,
+          scheduled_passed_date
+        FROM transit.schedule_stop_progress
+        WHERE schedule_id = $1
+        ORDER BY scheduled_passed_at ASC, stop_order ASC
+      `, [scheduleId]);
+    }
 
     const progressByOrder = new Map(
       progressResult.rows.map(row => [Number(row.stop_order), row])
@@ -2985,9 +3078,13 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
       currentDelayMinutes = Math.round((actualTime.getTime() - scheduledTime.getTime()) / 60000);
     }
 
+    const occurrenceDateKeyForMapping = progressDate || toDateKey(schedule.start_time);
+
     const stops = routeStopsResult.rows.map(row => {
       const etaMinutes = Number(row.estimated_arrival_minutes) || 0;
-      const scheduledPassedAt = new Date(schedule.start_time);
+      const templateStart = new Date(schedule.start_time);
+      const scheduledPassedAt = new Date(`${occurrenceDateKeyForMapping}T00:00:00`);
+      scheduledPassedAt.setHours(templateStart.getHours(), templateStart.getMinutes(), templateStart.getSeconds(), templateStart.getMilliseconds());
       scheduledPassedAt.setMinutes(scheduledPassedAt.getMinutes() + etaMinutes);
 
       const progress = progressByOrder.get(Number(row.stop_order));
