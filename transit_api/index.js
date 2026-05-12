@@ -583,6 +583,52 @@ async function ensureScheduleStopProgressTable() {
   `);
 
   await db.query(`
+    ALTER TABLE transit.schedule_stop_progress
+    ADD COLUMN IF NOT EXISTS scheduled_passed_date DATE
+  `);
+
+  await db.query(`
+    UPDATE transit.schedule_stop_progress
+    SET scheduled_passed_date = scheduled_passed_at::date
+    WHERE scheduled_passed_date IS NULL
+  `);
+
+  await db.query(`
+    ALTER TABLE transit.schedule_stop_progress
+    ALTER COLUMN scheduled_passed_date SET NOT NULL
+  `);
+
+  await db.query(`
+    DO $$
+    DECLARE
+      constraint_name text;
+    BEGIN
+      SELECT tc.constraint_name
+      INTO constraint_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
+       AND tc.table_schema = kcu.table_schema
+       AND tc.table_name = kcu.table_name
+      WHERE tc.table_schema = 'transit'
+        AND tc.table_name = 'schedule_stop_progress'
+        AND tc.constraint_type = 'UNIQUE'
+      GROUP BY tc.constraint_name
+      HAVING array_agg(kcu.column_name ORDER BY kcu.ordinal_position) = ARRAY['schedule_id', 'stop_order']
+      LIMIT 1;
+
+      IF constraint_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE transit.schedule_stop_progress DROP CONSTRAINT %I', constraint_name);
+      END IF;
+    END $$;
+  `);
+
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_stop_progress_schedule_order_date
+    ON transit.schedule_stop_progress (schedule_id, stop_order, scheduled_passed_date)
+  `);
+
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_schedule_stop_progress_schedule_order
     ON transit.schedule_stop_progress (schedule_id, stop_order, scheduled_passed_date)
   `);
