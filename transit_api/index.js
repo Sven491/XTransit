@@ -168,6 +168,263 @@ function parseWeekdaysValue(value) {
   return [];
 }
 
+function toNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function parseCommaSeparatedValues(value) {
+  if (!value && value !== 0) return [];
+  if (Array.isArray(value)) {
+    return value.map(item => String(item).trim()).filter(Boolean);
+  }
+
+  return String(value)
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function toDateKey(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function expandRecurringScheduleRows(rows) {
+  const expandedRows = [];
+
+  for (const row of rows) {
+    const weekdays = parseWeekdaysValue(row.weekdays);
+    if (!weekdays || weekdays.length === 0) {
+      expandedRows.push(row);
+      continue;
+    }
+
+    const templateDate = new Date(row.start_time);
+    if (Number.isNaN(templateDate.getTime())) {
+      expandedRows.push(row);
+      continue;
+    }
+
+    const templateDayOfWeek = templateDate.getDay();
+    const sortedWeekdays = [...new Set(weekdays)].sort((a, b) => a - b);
+    const durationMinutes = Number(
+      row.estimated_duration_minutes ?? row.estimatedDurationMinutes ?? 60
+    );
+
+    for (let week = 0; week < 52; week++) {
+      for (const targetWeekday of sortedWeekdays) {
+        const daysOffset = (targetWeekday - templateDayOfWeek + 7) % 7;
+        const totalDays = week * 7 + daysOffset;
+
+        const scheduleDate = new Date(templateDate);
+        scheduleDate.setDate(scheduleDate.getDate() + totalDays);
+
+        const endDate = new Date(scheduleDate);
+        endDate.setMinutes(endDate.getMinutes() + durationMinutes);
+
+        expandedRows.push({
+          ...row,
+          start_time: scheduleDate.toISOString(),
+          end_time: endDate.toISOString(),
+          is_recurring_instance: true,
+          template_id: row.id,
+        });
+      }
+    }
+  }
+
+  return expandedRows;
+}
+
+function scheduleMatchesFilters(schedule, filters, routeStopsByLine = new Map()) {
+  if (!schedule || !filters) return true;
+
+  const scheduleBusLineId = Number(schedule.bus_line_id ?? schedule.busLineId);
+  const scheduleBusId = Number(schedule.bus_id ?? schedule.busId);
+  const scheduleDriverId = Number(schedule.driver_id ?? schedule.driverId);
+  const scheduleStatus = String(schedule.status || '');
+  const scheduleDateKey = toDateKey(schedule.start_time ?? schedule.startTime);
+
+  if (filters.busLineId !== null && scheduleBusLineId !== filters.busLineId) {
+    return false;
+  }
+
+  if (filters.busId !== null && scheduleBusId !== filters.busId) {
+    return false;
+  }
+
+  if (filters.driverId !== null && scheduleDriverId !== filters.driverId) {
+    return false;
+  }
+
+  if (filters.statuses.length > 0 && !filters.statuses.includes(scheduleStatus)) {
+    return false;
+  }
+
+  if (filters.date && scheduleDateKey !== filters.date) {
+    return false;
+  }
+
+  if (filters.fromDate && scheduleDateKey && scheduleDateKey < filters.fromDate) {
+    return false;
+  }
+
+  if (filters.toDate && scheduleDateKey && scheduleDateKey > filters.toDate) {
+    return false;
+  }
+
+  if (filters.stopId !== null) {
+    const routeStops = routeStopsByLine.get(scheduleBusLineId) || [];
+    const matchesStop = routeStops.some(routeStop => Number(routeStop.stop_id ?? routeStop.stopId) === filters.stopId);
+    if (!matchesStop) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function parseScheduleFilters(query, options = {}) {
+  const statuses = parseCommaSeparatedValues(query.status || query.statuses || options.statuses || []);
+
+  return {
+    date: query.date ? String(query.date).trim() : null,
+    fromDate: query.fromDate ? String(query.fromDate).trim() : null,
+    toDate: query.toDate ? String(query.toDate).trim() : null,
+    driverId: toNumberOrNull(query.driverId ?? query.driver_id),
+    busId: toNumberOrNull(query.busId ?? query.bus_id),
+    busLineId: toNumberOrNull(query.busLineId ?? query.lineId ?? query.bus_line_id),
+    stopId: toNumberOrNull(query.stopId ?? query.stop_id),
+    statuses,
+  };
+}
+
+function formatWeekdayLabel(weekdays) {
+  const labels = ['Zo', 'Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za'];
+
+  if (!Array.isArray(weekdays) || weekdays.length === 0) {
+    return 'Eenmalig';
+  }
+
+  if (weekdays.length === 7) {
+    return 'Dagelijks';
+  }
+
+  return [...new Set(weekdays)]
+    .sort((a, b) => a - b)
+    .filter(day => day >= 0 && day < labels.length)
+    .map(day => labels[day])
+    .join(', ');
+}
+
+function buildDepartureTimes(startTime, routeStops = []) {
+  const startDate = new Date(startTime);
+
+  return routeStops.map(routeStop => {
+    const departureDate = new Date(startDate);
+    const etaMinutes = Number(routeStop.estimated_arrival_minutes ?? routeStop.estimatedArrivalMinutes) || 0;
+    departureDate.setMinutes(departureDate.getMinutes() + etaMinutes);
+
+    return {
+      order: Number(routeStop.stop_order ?? routeStop.stopOrder),
+      stopId: Number(routeStop.stop_id ?? routeStop.stopId),
+      stopName: routeStop.stop_name || routeStop.name || 'Unknown Stop',
+      estimatedArrivalMinutes: etaMinutes,
+      departureTime: departureDate.toISOString(),
+    };
+  });
+}
+
+function isRecurringSchedule(schedule) {
+  return parseWeekdaysValue(schedule.weekdays).length > 0;
+}
+
+function scheduleOccursOnDate(schedule, dateKey) {
+  if (!dateKey) return true;
+
+  const weekdays = parseWeekdaysValue(schedule.weekdays);
+  const scheduleDateKey = toDateKey(schedule.start_time ?? schedule.startTime);
+
+  if (!scheduleDateKey) {
+    return false;
+  }
+
+  if (weekdays.length === 0) {
+    return scheduleDateKey === dateKey;
+  }
+
+  if (scheduleDateKey > dateKey) {
+    return false;
+  }
+
+  const targetDate = new Date(`${dateKey}T00:00:00`);
+  return weekdays.includes(targetDate.getDay());
+}
+
+function materializeScheduleOverviewRow(row, dateKey, routeStopsByLine = new Map()) {
+  const weekdays = parseWeekdaysValue(row.weekdays);
+  const recurring = weekdays.length > 0;
+  const templateStart = new Date(row.startTime ?? row.start_time);
+  const templateEnd = new Date(row.endTime ?? row.end_time);
+  let startTime = row.startTime ?? row.start_time;
+  let endTime = row.endTime ?? row.end_time;
+
+  if (recurring && dateKey) {
+    const occurrenceStart = new Date(`${dateKey}T00:00:00`);
+    occurrenceStart.setHours(
+      templateStart.getHours(),
+      templateStart.getMinutes(),
+      templateStart.getSeconds(),
+      templateStart.getMilliseconds()
+    );
+
+    startTime = occurrenceStart.toISOString();
+
+    if (Number.isFinite(templateEnd.getTime()) && Number.isFinite(templateStart.getTime())) {
+      const durationMillis = templateEnd.getTime() - templateStart.getTime();
+      const occurrenceEnd = new Date(occurrenceStart);
+      occurrenceEnd.setMilliseconds(occurrenceEnd.getMilliseconds() + durationMillis);
+      endTime = occurrenceEnd.toISOString();
+    }
+  }
+
+  const busLineId = Number(row.busLineId ?? row.bus_line_id);
+  const routeStops = routeStopsByLine.get(busLineId) || [];
+  const departureTimes = buildDepartureTimes(startTime, routeStops);
+
+  return {
+    id: Number(row.id),
+    busLineId,
+    busId: Number(row.busId ?? row.bus_id),
+    driverId: row.driverId !== null && row.driverId !== undefined ? Number(row.driverId) : null,
+    driverName: row.driverName ?? row.driver_name ?? null,
+    startTime,
+    endTime,
+    weekdays,
+    status: row.status,
+    lineNumber: Number(row.lineNumber ?? row.line_number) || null,
+    busName: row.busName ?? row.bus_name ?? 'Unknown Bus',
+    licensePlate: row.licensePlate ?? row.license_plate ?? null,
+    createdAt: row.createdAt ?? row.created_at ?? null,
+    scheduleType: recurring ? 'recurring' : 'one_time',
+    recurrenceLabel: formatWeekdayLabel(weekdays),
+    isRecurringInstance: recurring && Boolean(dateKey),
+    templateId: row.templateId ?? row.template_id ?? null,
+    departureTimes,
+  };
+}
+
+function mapRecurringOccurrenceRows(rows, dateKey, routeStopsByLine) {
+  return rows
+    .filter(row => scheduleOccursOnDate(row, dateKey))
+    .map(row => materializeScheduleOverviewRow(row, dateKey, routeStopsByLine))
+    .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+}
+
 /**
  * Check if two schedules have date/weekday overlap
  */
@@ -1617,48 +1874,36 @@ app.get('/admin/drivers', authMiddleware, adminMiddleware, async (req, res) => {
 app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (DEV_MOCK) {
-      // Generate recurring schedules for mock data too
-      let expandedMockSchedules = [];
-      
-      const generateRecurringInstancesForMock = (template) => {
-        if (!template.weekdays || template.weekdays.length === 0) {
-          return [template];
+      const routeStopsByLine = new Map();
+      for (const routeStop of _mock.routeStops || []) {
+        const busLineId = Number(routeStop.busLineId);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
         }
-
-        const instances = [];
-        const templateDate = new Date(template.startTime);
-        const templateDayOfWeek = templateDate.getDay();
-        const sortedWeekdays = [...template.weekdays].sort();
-
-        // Generate for 52 weeks
-        for (let week = 0; week < 52; week++) {
-          for (const targetWeekday of sortedWeekdays) {
-            const scheduleDate = new Date(templateDate);
-            let daysOffset = (targetWeekday - templateDayOfWeek + 7) % 7;
-            let totalDays = week * 7 + daysOffset;
-            
-            scheduleDate.setDate(scheduleDate.getDate() + totalDays);
-            
-            const endDate = new Date(scheduleDate);
-            endDate.setMinutes(endDate.getMinutes() + 60);
-
-            instances.push({
-              ...template,
-              startTime: scheduleDate.toISOString(),
-              endTime: endDate.toISOString(),
-              isRecurringInstance: true,
-              templateId: template.id,
-            });
-          }
-        }
-        return instances;
-      };
-
-      for (const s of (_mock.schedules || [])) {
-        expandedMockSchedules.push(...generateRecurringInstancesForMock(s));
+        routeStopsByLine.get(busLineId).push({
+          stop_id: routeStop.stopId,
+          stop_order: routeStop.stopOrder,
+        });
       }
 
-      const schedules = expandedMockSchedules
+      const schedules = expandRecurringScheduleRows((_mock.schedules || []).map(s => {
+        const busLine = _mock.busLines.find(bl => bl.id === s.busLineId);
+        const bus = _mock.fleetBuses.find(b => b.id === s.busId);
+        return {
+          ...s,
+          busLineId: s.busLineId,
+          busId: s.busId,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          weekdays: s.weekdays || [],
+          status: s.status,
+          lineNumber: busLine?.lineNumber || 0,
+          busName: bus?.name || 'Unknown Bus',
+          driverId: s.driverId || null,
+          estimatedDurationMinutes: busLine?.estimatedDurationMinutes || 60,
+        };
+      }))
+        .filter(row => scheduleMatchesFilters(row, parseScheduleFilters(req.query), routeStopsByLine))
         .map(s => ({
           ...s,
           departureTimes: calculateDepartureTimes(s.startTime, s.busLineId, _mock),
@@ -1735,68 +1980,9 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
       }
     }
 
-    // Helper function to generate schedules from a recurring template
-    const generateRecurringInstances = (templateRow, routeStops) => {
-      const weekdays = parseWeekdaysValue(templateRow.weekdays);
-      
-      // If no weekdays, return single schedule
-      if (!weekdays || weekdays.length === 0) {
-        return [templateRow];
-      }
-
-      const instances = [];
-      const templateDate = new Date(templateRow.start_time);
-      const templateDayOfWeek = templateDate.getDay();
-      const sortedWeekdays = [...weekdays].sort();
-      
-      // Generate instances for 52 weeks ahead
-      for (let week = 0; week < 52; week++) {
-        for (const targetWeekday of sortedWeekdays) {
-          // Calculate days from template start to this target weekday
-          let daysOffset = (targetWeekday - templateDayOfWeek + 7) % 7;
-          
-          // For first week, if daysOffset is 0, include template date
-          // Otherwise, advance by weeks until we hit the first occurrence
-          let totalDays = daysOffset;
-          if (week > 0) {
-            totalDays = week * 7 + daysOffset;
-          } else if (daysOffset === 0) {
-            totalDays = 0;
-          } else {
-            // First week: if weekday hasn't occurred yet, skip to next week
-            totalDays = daysOffset;
-          }
-          
-          const scheduleDate = new Date(templateDate);
-          scheduleDate.setDate(scheduleDate.getDate() + totalDays);
-          
-          const endDate = new Date(scheduleDate);
-          endDate.setMinutes(endDate.getMinutes() + (templateRow.estimated_duration_minutes || 60));
-
-          instances.push({
-            ...templateRow,
-            start_time: scheduleDate.toISOString(),
-            end_time: endDate.toISOString(),
-            is_recurring_instance: true,
-            template_id: templateRow.id,
-          });
-        }
-      }
-
-      return instances;
-    };
-
-    let expandedSchedules = [];
-    for (const row of result.rows) {
-      const weekdays = parseWeekdaysValue(row.weekdays);
-      if (weekdays && weekdays.length > 0) {
-        // This is a recurring template - expand it
-        expandedSchedules.push(...generateRecurringInstances(row, routeStopsByLine.get(Number(row.bus_line_id)) || []));
-      } else {
-        // Single schedule
-        expandedSchedules.push(row);
-      }
-    }
+    const filters = parseScheduleFilters(req.query);
+    const expandedSchedules = expandRecurringScheduleRows(result.rows)
+      .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
 
     const schedules = expandedSchedules.map(row => {
       const weekdays = parseWeekdaysValue(row.weekdays);
@@ -1994,10 +2180,22 @@ app.delete('/admin/schedules/:scheduleId', authMiddleware, adminMiddleware, asyn
 // ============================================
 app.get('/schedules', async (req, res) => {
   try {
-    const { date, lineId } = req.query;
+    const filters = parseScheduleFilters(req.query, { statuses: ['planned', 'active'] });
 
     if (DEV_MOCK) {
-      const schedules = (_mock.schedules || []).map(s => {
+      const routeStopsByLine = new Map();
+      for (const routeStop of _mock.routeStops || []) {
+        const busLineId = Number(routeStop.busLineId);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
+        }
+        routeStopsByLine.get(busLineId).push({
+          stop_id: routeStop.stopId,
+          stop_order: routeStop.stopOrder,
+        });
+      }
+
+      const schedules = expandRecurringScheduleRows((_mock.schedules || []).map(s => {
         const busLine = _mock.busLines.find(bl => bl.id === s.busLineId);
         const bus = _mock.fleetBuses.find(b => b.id === s.busId);
         return {
@@ -2010,8 +2208,11 @@ app.get('/schedules', async (req, res) => {
           status: s.status,
           lineNumber: busLine?.lineNumber || 0,
           busName: bus?.name || 'Unknown Bus',
+          driverId: s.driverId || null,
+          estimatedDurationMinutes: busLine?.estimatedDurationMinutes || 60,
         };
-      });
+      })).filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
+
       return res.json({ schedules });
     }
 
@@ -2020,46 +2221,235 @@ app.get('/schedules', async (req, res) => {
         s.id,
         s.bus_line_id,
         s.bus_id,
+        s.driver_id,
         s.start_time,
         s.end_time,
         s.weekdays,
         s.status,
         bl.line_number,
-        b.name as bus_name
+        b.name as bus_name,
+        bl.estimated_duration_minutes
       FROM transit.schedules s
       LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
       LEFT JOIN fleet.bus b ON s.bus_id = b.id
-      WHERE s.status IN ('planned', 'active')
+      WHERE 1 = 1
     `;
 
     const params = [];
 
-    if (date) {
-      query += ` AND DATE(s.start_time) = $${params.length + 1}`;
-      params.push(date);
+    if (filters.statuses.length > 0) {
+      query += ` AND s.status = ANY($${params.length + 1}::text[])`;
+      params.push(filters.statuses);
     }
 
-    if (lineId) {
+    if (filters.busLineId !== null) {
       query += ` AND s.bus_line_id = $${params.length + 1}`;
-      params.push(lineId);
+      params.push(filters.busLineId);
+    }
+
+    if (filters.busId !== null) {
+      query += ` AND s.bus_id = $${params.length + 1}`;
+      params.push(filters.busId);
+    }
+
+    if (filters.driverId !== null) {
+      query += ` AND s.driver_id = $${params.length + 1}`;
+      params.push(filters.driverId);
     }
 
     query += ` ORDER BY s.start_time ASC`;
 
     const result = await db.query(query, params);
 
-    res.json({
-      schedules: result.rows.map(row => ({
+    const lineIds = Array.from(new Set(result.rows.map(row => Number(row.bus_line_id)).filter(Number.isFinite)));
+    const routeStopsByLine = new Map();
+
+    if (filters.stopId !== null && lineIds.length > 0) {
+      const routeStopsResult = await db.query(`
+        SELECT
+          rs.bus_line_id,
+          rs.stop_id,
+          rs.stop_order
+        FROM transit.route_stops rs
+        WHERE rs.bus_line_id = ANY($1::int[])
+        ORDER BY rs.bus_line_id ASC, rs.stop_order ASC
+      `, [lineIds]);
+
+      for (const row of routeStopsResult.rows) {
+        const busLineId = Number(row.bus_line_id);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
+        }
+        routeStopsByLine.get(busLineId).push(row);
+      }
+    }
+
+    const schedules = expandRecurringScheduleRows(result.rows)
+      .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine))
+      .map(row => ({
         id: Number(row.id),
         busLineId: Number(row.bus_line_id),
         busId: Number(row.bus_id),
+        driverId: row.driver_id !== null && row.driver_id !== undefined ? Number(row.driver_id) : null,
         startTime: row.start_time,
         endTime: row.end_time,
         weekdays: row.weekdays ? (typeof row.weekdays === 'string' ? JSON.parse(row.weekdays) : row.weekdays) : [],
         status: row.status,
         lineNumber: row.line_number,
         busName: row.bus_name,
-      })),
+        estimatedDurationMinutes: Number(row.estimated_duration_minutes) || null,
+        isRecurringInstance: row.is_recurring_instance || false,
+        templateId: row.template_id || null,
+      }));
+
+    res.json({ schedules });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.get('/schedules/overview', async (req, res) => {
+  try {
+    const filters = parseScheduleFilters(req.query, { statuses: ['planned', 'active'] });
+    const overviewDateKey = filters.date || null;
+
+    if (DEV_MOCK) {
+      const routeStopsByLine = new Map();
+
+      for (const routeStop of _mock.routeStops || []) {
+        const busLineId = Number(routeStop.busLineId);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
+        }
+
+        routeStopsByLine.get(busLineId).push({
+          bus_line_id: busLineId,
+          stop_id: routeStop.stopId,
+          stop_order: routeStop.stopOrder,
+          estimated_arrival_minutes: routeStop.estimatedArrivalMinutes,
+          stop_name: routeStop.name || '',
+        });
+      }
+
+      const baseRows = (_mock.schedules || []).map(schedule => {
+        const busLine = _mock.busLines.find(line => Number(line.id) === Number(schedule.busLineId));
+        const bus = _mock.fleetBuses.find(vehicle => Number(vehicle.id) === Number(schedule.busId));
+        const driver = _mock.drivers.find(person => Number(person.id) === Number(schedule.driverId));
+
+        return {
+          id: schedule.id,
+          busLineId: schedule.busLineId,
+          busId: schedule.busId,
+          driverId: schedule.driverId ?? null,
+          driverName: driver ? driver.name : null,
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          weekdays: schedule.weekdays || [],
+          status: schedule.status,
+          lineNumber: busLine?.lineNumber || 0,
+          busName: bus?.name || 'Unknown Bus',
+          licensePlate: bus?.licensePlate || '',
+          createdAt: schedule.createdAt,
+        };
+      });
+
+      const schedules = mapRecurringOccurrenceRows(baseRows, overviewDateKey, routeStopsByLine)
+        .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
+
+      return res.json({
+        date: overviewDateKey,
+        summary: {
+          total: schedules.length,
+          recurring: schedules.filter(schedule => schedule.scheduleType === 'recurring').length,
+          oneTime: schedules.filter(schedule => schedule.scheduleType === 'one_time').length,
+        },
+        schedules,
+      });
+    }
+
+    const hasWeekdaysColumn = await db.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'transit' AND table_name = 'schedules' AND column_name = 'weekdays'
+    `);
+
+    const baseSelect = `
+      SELECT
+        s.id,
+        s.bus_line_id AS "busLineId",
+        s.bus_id AS "busId",
+        s.driver_id AS "driverId",
+        s.start_time AS "startTime",
+        s.end_time AS "endTime",
+        s.status,
+        s.created_at AS "createdAt",
+        bl.line_number AS "lineNumber",
+        bl.estimated_duration_minutes AS "estimatedDurationMinutes",
+        b.name AS "busName",
+        b.license_plate AS "licensePlate",
+        TRIM(COALESCE(e.firstname, '') || ' ' || COALESCE(e.lastname, '')) AS "driverName"`;
+
+    const result = hasWeekdaysColumn.rows.length > 0
+      ? await db.query(`${baseSelect}, s.weekdays AS weekdays
+          FROM transit.schedules s
+          LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+          LEFT JOIN fleet.bus b ON s.bus_id = b.id
+          LEFT JOIN workers.employees e ON s.driver_id = e.id
+          WHERE s.status = ANY($1::text[])
+          ORDER BY s.start_time ASC`, [filters.statuses])
+      : await db.query(`${baseSelect}, NULL AS weekdays
+          FROM transit.schedules s
+          LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+          LEFT JOIN fleet.bus b ON s.bus_id = b.id
+          LEFT JOIN workers.employees e ON s.driver_id = e.id
+          WHERE s.status = ANY($1::text[])
+          ORDER BY s.start_time ASC`, [filters.statuses]);
+
+    const lineIds = Array.from(
+      new Set(
+        result.rows
+          .map(row => Number(row.busLineId))
+          .filter(Number.isFinite)
+      )
+    );
+
+    const routeStopsByLine = new Map();
+
+    if (lineIds.length > 0) {
+      const routeStopsResult = await db.query(`
+        SELECT
+          rs.bus_line_id,
+          rs.stop_id,
+          rs.stop_order,
+          rs.estimated_arrival_minutes,
+          s.name AS stop_name
+        FROM transit.route_stops rs
+        JOIN transit.stops s ON s.id = rs.stop_id
+        WHERE rs.bus_line_id = ANY($1::int[])
+        ORDER BY rs.bus_line_id ASC, rs.stop_order ASC
+      `, [lineIds]);
+
+      for (const row of routeStopsResult.rows) {
+        const busLineId = Number(row.bus_line_id);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
+        }
+
+        routeStopsByLine.get(busLineId).push(row);
+      }
+    }
+
+    const schedules = mapRecurringOccurrenceRows(result.rows, overviewDateKey, routeStopsByLine)
+      .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
+
+    res.json({
+      date: overviewDateKey,
+      summary: {
+        total: schedules.length,
+        recurring: schedules.filter(schedule => schedule.scheduleType === 'recurring').length,
+        oneTime: schedules.filter(schedule => schedule.scheduleType === 'one_time').length,
+      },
+      schedules,
     });
   } catch (err) {
     console.error(err);

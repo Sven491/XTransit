@@ -1,3 +1,5 @@
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:flutter/material.dart';
 import '../models/schedule.dart' as schedule;
 import '../screens/navigation_screen.dart';

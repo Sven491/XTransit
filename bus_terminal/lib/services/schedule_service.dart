@@ -12,7 +12,7 @@ class ScheduleService {
   static const String _apiBaseUrl = 'http://192.168.2.66:5001';
   final _authService = AuthService();
 
-  /// Get public schedules for a specific date.
+  /// Get public schedule overview for a specific date.
   Future<List<ServiceSchedule>> getSchedules(DateTime date, {int? lineId}) async {
     try {
       final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
@@ -21,7 +21,7 @@ class ScheduleService {
         queryParameters['lineId'] = lineId.toString();
       }
 
-      final uri = Uri.parse('$_apiBaseUrl/schedules').replace(queryParameters: queryParameters);
+      final uri = Uri.parse('$_apiBaseUrl/schedules/overview').replace(queryParameters: queryParameters);
       final response = await http.get(uri);
 
       if (response.statusCode == 200) {

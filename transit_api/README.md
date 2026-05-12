@@ -90,6 +90,16 @@ Alle endpoints vereisen een `Authorization: Bearer {token}` header.
 - Details van een specifieke route
 - Response: `{ "route": {...} }`
 
+### Public Schedule Overview
+
+**GET** `/schedules/overview?date=2026-05-06&lineId=1`
+- Haalt een datum-gebonden overzicht op van geplande diensten
+- Herhaalde diensten worden naar de geselecteerde datum gematerialiseerd via `weekdays`
+- Incidentele diensten worden alleen meegenomen op hun exacte datum
+- Response: `{ "date": "2026-05-06", "summary": {...}, "schedules": [...] }`
+
+De legacy endpoint **GET** `/schedules` blijft beschikbaar voor bestaande clients.
+
 ### Navigation
 
 **POST** `/navigation/route`

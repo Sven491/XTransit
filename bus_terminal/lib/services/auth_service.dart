@@ -5,7 +5,6 @@ import '../models/user.dart';
 
 /// Authentication Service
 class AuthService {
-  // TODO: Implement API connector - configure base URL from env/config
   static const String _apiBaseUrl = 'http://192.168.2.66:5000';
   static const String _tokenKey = 'auth_token';
 
