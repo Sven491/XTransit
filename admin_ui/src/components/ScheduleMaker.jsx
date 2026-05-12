@@ -7,6 +7,7 @@ const WEEKDAY_VALUES = [1, 2, 3, 4, 5, 6, 0] // 0=Sun, 1=Mon...
 export default function ScheduleMaker({ token, user }) {
   const client = transitClient(token)
   const [schedules, setSchedules] = useState([])
+  const [overviewSchedules, setOverviewSchedules] = useState([])
   const [busLines, setBusLines] = useState([])
   const [buses, setBuses] = useState([])
   const [drivers, setDrivers] = useState([])
@@ -32,6 +33,20 @@ export default function ScheduleMaker({ token, user }) {
       setSchedules(res.data.schedules || [])
     } catch (err) {
       setMessage('Error loading schedules: ' + (err.response?.data?.error || err.message))
+    }
+  }
+
+  const loadOverviewSchedules = async () => {
+    try {
+      const params = new URLSearchParams({ date: overviewDate })
+      if (selectedDriverFilter) {
+        params.set('driverId', selectedDriverFilter)
+      }
+
+      const res = await client.get(`/schedules/overview?${params.toString()}`)
+      setOverviewSchedules(res.data.schedules || [])
+    } catch (err) {
+      setMessage('Error loading timetable: ' + (err.response?.data?.error || err.message))
     }
   }
 
@@ -69,6 +84,10 @@ export default function ScheduleMaker({ token, user }) {
     loadDrivers()
   }, [])
 
+  useEffect(() => {
+    loadOverviewSchedules()
+  }, [overviewDate, selectedDriverFilter])
+
   const createSchedule = async (e) => {
     e.preventDefault()
     setMessage(null)
@@ -100,6 +119,7 @@ export default function ScheduleMaker({ token, user }) {
       setDriverId('')
       setSelectedWeekdays([])
       await loadSchedules()
+      await loadOverviewSchedules()
     } catch (err) {
       const errMsg = err.response?.data?.error || err.message
       setMessage('Error: ' + errMsg)
@@ -113,6 +133,7 @@ export default function ScheduleMaker({ token, user }) {
       setMessage(`Dienst verwijderd: Lijn ${lineNumber}, ${busName}`)
       setDeleteConfirm(null)
       await loadSchedules()
+      await loadOverviewSchedules()
     } catch (err) {
       const errMsg = err.response?.data?.error || err.message
       setMessage('Error: ' + errMsg)
@@ -222,19 +243,8 @@ export default function ScheduleMaker({ token, user }) {
     )
   }
 
-  // Group schedules by date and time (apply driver filter if selected)
+  // Group schedules by date and time using the API-backed overview
   const timeSlots = generateTimeSlots()
-  const filteredSchedules = selectedDriverFilter
-    ? schedules.filter(s => String(s.driverId) === String(selectedDriverFilter))
-    : schedules
-  const overviewSchedules = filteredSchedules.filter(schedule => {
-    if (!overviewDate) return true
-    const scheduleDate = new Date(schedule.startTime)
-    const selectedOverview = new Date(`${overviewDate}T00:00:00`)
-    return scheduleDate.getFullYear() === selectedOverview.getFullYear()
-      && scheduleDate.getMonth() === selectedOverview.getMonth()
-      && scheduleDate.getDate() === selectedOverview.getDate()
-  })
   const schedulesBySlot = groupSchedulesByTimeSlot(overviewSchedules, timeSlots)
 
   return (
@@ -389,11 +399,9 @@ export default function ScheduleMaker({ token, user }) {
                               Voertuig in gebruik
                             </div>
                           )}
-                          {schedule.weekdays && schedule.weekdays.length > 0 && (
-                            <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
-                              {getWeekdayLabel(schedule.weekdays)}
-                            </div>
-                          )}
+                          <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                            {schedule.recurrenceLabel || getWeekdayLabel(schedule.weekdays)}
+                          </div>
                         </div>
 
                         {/* Expandable stops list */}
@@ -481,6 +489,7 @@ export default function ScheduleMaker({ token, user }) {
                                                 setMessage('ETA updated')
                                                 await loadRouteStops(lineId)
                                                 await loadSchedules()
+                                                await loadOverviewSchedules()
                                               } catch (err) {
                                                 setMessage('Error: ' + (err.response?.data?.error || err.message))
                                               }

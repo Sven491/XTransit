@@ -425,6 +425,58 @@ function mapRecurringOccurrenceRows(rows, dateKey, routeStopsByLine) {
     .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 }
 
+function materializeScheduleRowsInRange(rows, fromDateKey, toDateKey, routeStopsByLine) {
+  const occurrences = [];
+  if (!fromDateKey || !toDateKey) return occurrences;
+
+  const fromDate = new Date(`${fromDateKey}T00:00:00`);
+  const toDate = new Date(`${toDateKey}T23:59:59`);
+
+  // Safety cap: don't generate more than 366 days
+  const maxDays = 366;
+  const spanDays = Math.ceil((toDate - fromDate) / (24 * 60 * 60 * 1000));
+  if (spanDays > maxDays) return occurrences;
+
+  for (const row of rows) {
+    const weekdays = parseWeekdaysValue(row.weekdays);
+
+    if (!weekdays || weekdays.length === 0) {
+      const rowDateKey = toDateKey(row.start_time ?? row.startTime);
+      if (rowDateKey && rowDateKey >= fromDateKey && rowDateKey <= toDateKey) {
+        occurrences.push(materializeScheduleOverviewRow(row, rowDateKey, routeStopsByLine));
+      }
+      continue;
+    }
+
+    // recurring template: generate occurrences per weekday within range
+    const templateStart = new Date(row.start_time ?? row.startTime);
+    for (const wd of [...new Set(weekdays)]) {
+      // find first date >= fromDate that matches weekday wd and is >= templateStart
+      let cursor = new Date(fromDate);
+      const fromWeekday = cursor.getDay();
+      const daysOffset = (wd - fromWeekday + 7) % 7;
+      cursor.setDate(cursor.getDate() + daysOffset);
+
+      // ensure cursor >= templateStart (so recurrence doesn't start before template)
+      if (cursor < templateStart) {
+        // advance by weeks until >= templateStart
+        const diffDays = Math.ceil((templateStart - cursor) / (24 * 60 * 60 * 1000));
+        const weeksToAdvance = Math.ceil(diffDays / 7);
+        cursor.setDate(cursor.getDate() + weeksToAdvance * 7);
+      }
+
+      while (cursor <= toDate) {
+        const occurrenceKey = cursor.toISOString().slice(0, 10);
+        occurrences.push(materializeScheduleOverviewRow(row, occurrenceKey, routeStopsByLine));
+        cursor.setDate(cursor.getDate() + 7);
+      }
+    }
+  }
+
+  // sort and return
+  return occurrences.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+}
+
 /**
  * Check if two schedules have date/weekday overlap
  */
@@ -2439,8 +2491,14 @@ app.get('/schedules/overview', async (req, res) => {
       }
     }
 
-    const schedules = mapRecurringOccurrenceRows(result.rows, overviewDateKey, routeStopsByLine)
-      .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
+    let schedules = [];
+    if (filters.fromDate && filters.toDate) {
+      schedules = materializeScheduleRowsInRange(result.rows, filters.fromDate, filters.toDate, routeStopsByLine)
+        .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
+    } else {
+      schedules = mapRecurringOccurrenceRows(result.rows, overviewDateKey, routeStopsByLine)
+        .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
+    }
 
     res.json({
       date: overviewDateKey,
