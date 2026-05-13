@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/schedule.dart';
+import '../models/schedule.dart' as schedule;
 import '../services/schedule_service.dart';
 import '../services/auth_service.dart';
 import '../services/exceptions.dart';
@@ -15,7 +15,7 @@ class DailyScheduleScreen extends StatefulWidget {
 class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
   final _scheduleService = ScheduleService();
   final _authService = AuthService();
-  late Future<DailySchedule> _scheduleFuture;
+  late Future<schedule.DailySchedule> _scheduleFuture;
   DateTime _selectedDate = DateTime.now();
 
   @override
@@ -60,6 +60,16 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
       });
       _refreshSchedule();
     }
+  }
+
+  // Group routes by hour for better visual organization
+  Map<int, List<schedule.Route>> _groupByHour(List<schedule.Route> routes) {
+    final grouped = <int, List<schedule.Route>>{};
+    for (final route in routes) {
+      final hour = route.startTime.hour;
+      grouped.putIfAbsent(hour, () => []).add(route);
+    }
+    return grouped;
   }
 
   void _moveDay(int deltaDays) {
@@ -198,7 +208,7 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
               ),
             ),
             Expanded(
-              child: FutureBuilder<DailySchedule>(
+              child: FutureBuilder<schedule.DailySchedule>(
                 future: _scheduleFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
@@ -267,12 +277,12 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              'No routes scheduled',
+                              'Geen actieve ritten',
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Check back later for your schedule',
+                              'Je hebt geen geplande ritten voor deze dag',
                               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                     color: colorScheme.onSurfaceVariant,
                                   ),
@@ -288,25 +298,64 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
                     ..sort((a, b) => a.startTime.compareTo(b.startTime));
                   final scheduledRoutes = routes.where((r) => r.status == 'scheduled').toList();
                   final inProgressRoutes = routes.where((r) => r.status == 'in_progress').toList();
-                  final completedRoutes = routes.where((r) => r.status == 'completed').toList();
+                  
+                  // Merge and group by hour
+                  final allActiveRoutes = [...inProgressRoutes, ...scheduledRoutes]
+                    ..sort((a, b) => a.startTime.compareTo(b.startTime));
+                  final hourGroups = _groupByHour(allActiveRoutes);
+                  final sortedHours = hourGroups.keys.toList()..sort();
 
                   return RefreshIndicator(
                     onRefresh: _refreshSchedule,
                     child: ListView(
                       padding: const EdgeInsets.only(bottom: 16),
                       children: [
-                        if (inProgressRoutes.isNotEmpty) ...[
-                          _sectionHeader('In Progress', colorScheme.tertiary),
-                          ...inProgressRoutes.map((route) => RouteCard(route: route, onTap: () {})),
-                        ],
-                        if (scheduledRoutes.isNotEmpty) ...[
-                          _sectionHeader('Scheduled', colorScheme.primary),
-                          ...scheduledRoutes.map((route) => RouteCard(route: route, onTap: () {})),
-                        ],
-                        if (completedRoutes.isNotEmpty) ...[
-                          _sectionHeader('Completed', colorScheme.secondary),
-                          ...completedRoutes.map((route) => RouteCard(route: route, onTap: () {})),
-                        ],
+                        if (allActiveRoutes.isEmpty)
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 32),
+                              child: Text(
+                                'Geen actieve ritten voor deze dag',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                              ),
+                            ),
+                          )
+                        else
+                          ...sortedHours.map((hour) {
+                            final routesForHour = hourGroups[hour] ?? [];
+                            return Column(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 16, top: 16, bottom: 8),
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        '${hour.toString().padLeft(2, '0')}:00 uur',
+                                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                              color: colorScheme.primary,
+                                            ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Container(
+                                          height: 1,
+                                          color: colorScheme.outlineVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                ...routesForHour.map((route) => Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      child: RouteCard(route: route, onTap: () {}),
+                                    )),
+                                const SizedBox(height: 4),
+                              ],
+                            );
+                          }),
                         const SizedBox(height: 8),
                       ],
                     ),
@@ -316,19 +365,6 @@ class _DailyScheduleScreenState extends State<DailyScheduleScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _sectionHeader(String title, Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 16, top: 24, bottom: 8),
-      child: Text(
-        title,
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
       ),
     );
   }

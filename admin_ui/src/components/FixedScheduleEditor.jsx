@@ -167,6 +167,10 @@ const FixedScheduleEditor = ({
   const [presetName, setPresetName] = useState('')
   const [savedPresets, setSavedPresets] = useState([])
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [showDriverAssignment, setShowDriverAssignment] = useState(false)
+  const [driverAssignments, setDriverAssignments] = useState([])
+  const [availableDrivers, setAvailableDrivers] = useState([])
+  const [pendingBatchData, setPendingBatchData] = useState(null)
 
   const isAdmin = Boolean(user?.userCode)
 
@@ -202,6 +206,23 @@ const FixedScheduleEditor = ({
       setSavedPresets([])
     }
   }, [user])
+
+  // Load available drivers when driver assignment dialog opens
+  useEffect(() => {
+    if (!showDriverAssignment) return
+
+    const loadDrivers = async () => {
+      try {
+        const res = await client.get('/admin/drivers')
+        setAvailableDrivers(res.data.drivers || [])
+      } catch (err) {
+        console.error('Error loading drivers:', err)
+        setAvailableDrivers([])
+      }
+    }
+
+    loadDrivers()
+  }, [showDriverAssignment])
 
   const persistPresets = (nextPresets) => {
     setSavedPresets(nextPresets)
@@ -409,6 +430,37 @@ const FixedScheduleEditor = ({
         weekdays: normalizedWeekdays,
       }
     })
+
+    // If no driver assigned, show driver assignment dialog
+    if (!driverId) {
+      setPendingBatchData({
+        schedules,
+        times: uniqueTimes,
+        dayLabels: normalizedWeekdays.length > 0 ? getWeekdayLabel(normalizedWeekdays) : 'eenmalig',
+        busLineId: Number(selectedLine),
+        busId: Number(selectedBus),
+        weekdays: normalizedWeekdays,
+      })
+      
+      // Check for conflicts
+      try {
+        const res = await client.post('/admin/check-driver-conflicts', {
+          generatedTimes: uniqueTimes.map(t => `${selectedDate}T${t}:00`),
+          drivers: drivers || [],
+          busLineId: Number(selectedLine),
+          busId: Number(selectedBus),
+          weekdays: normalizedWeekdays,
+        })
+        setDriverAssignments(res.data.assignments || [])
+        setShowDriverAssignment(true)
+        return { skipped: true }
+      } catch (err) {
+        console.error('Error checking conflicts:', err)
+        // Still show dialog even if conflict check failed
+        setShowDriverAssignment(true)
+        return { skipped: true }
+      }
+    }
 
     const payload = { schedules }
 
@@ -882,6 +934,141 @@ const FixedScheduleEditor = ({
                 Delete
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Driver Assignment Modal */}
+      {showDriverAssignment && (
+        <div style={overlay}>
+          <div style={{ ...modal, maxWidth: '600px', maxHeight: '80vh', overflowY: 'auto' }}>
+            <h3 style={{ marginTop: 0, marginBottom: '1rem' }}>Verdeel ritten aan chauffeurs</h3>
+            
+            {!driverAssignments || driverAssignments.length === 0 ? (
+              <p>Laden...</p>
+            ) : (
+              <>
+                <div style={{ marginBottom: '1rem', fontSize: '0.9rem', color: '#666' }}>
+                  <strong>{driverAssignments.length}</strong> vertrektijden gevonden.
+                  <br />
+                  Klik op een chauffeur om deze ritt toe te wijzen.
+                </div>
+
+                <div style={{ marginBottom: '1.5rem' }}>
+                  {driverAssignments.map((assignment, idx) => (
+                    <div key={idx} style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                      <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                        Ritt {idx + 1}: {assignment.time.split('T')[1]?.slice(0, 5)} uur
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.5rem' }}>
+                        {assignment.driverAssignments?.map((driverOpt, dIdx) => {
+                          const isAssigned = assignment.assignedDriverId === driverOpt.driverId
+                          const bgColor = isAssigned ? '#4caf50' : driverOpt.hasConflict ? '#ffcdd2' : '#e3f2fd'
+                          const textColor = isAssigned ? 'white' : driverOpt.hasConflict ? '#c62828' : 'inherit'
+                          
+                          return (
+                            <button
+                              key={dIdx}
+                              onClick={() => {
+                                setDriverAssignments(prev => prev.map((a, aIdx) =>
+                                  aIdx === idx ? { ...a, assignedDriverId: driverOpt.driverId } : a
+                                ))
+                              }}
+                              style={{
+                                padding: '0.5rem',
+                                backgroundColor: bgColor,
+                                color: textColor,
+                                border: isAssigned ? '2px solid #2e7d32' : '1px solid #ccc',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '0.8rem',
+                                fontWeight: isAssigned ? 'bold' : 'normal',
+                              }}
+                              title={driverOpt.hasConflict ? 'Conflict: chauffeur al bezet' : 'Klik om toe te wijzen'}
+                            >
+                              {driverOpt.driverName?.split(' ')[0]}
+                              {driverOpt.hasConflict && ' ⚠️'}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => setShowDriverAssignment(false)}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: '#f44336',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Annuleren
+                  </button>
+                  <button
+                    onClick={async () => {
+                      // Finalize and create schedules
+                      if (!pendingBatchData) return
+
+                      try {
+                        const assignmentsWithEndTime = driverAssignments.map((assignment, idx) => {
+                          const nextTime = driverAssignments[idx + 1]?.time
+                          const endTime = nextTime || addMinutesToTime(assignment.time.split('T')[1], 60) // Default 1 hour
+                          return {
+                            time: assignment.time,
+                            endTime,
+                            assignedDriverId: assignment.assignedDriverId,
+                          }
+                        })
+
+                        const payload = {
+                          assignments: assignmentsWithEndTime,
+                          busLineId: pendingBatchData.busLineId,
+                          busId: pendingBatchData.busId,
+                          weekdays: pendingBatchData.weekdays,
+                        }
+
+                        // Use bulk endpoint with driver assignments
+                        const schedules = assignmentsWithEndTime
+                          .filter(a => a.assignedDriverId)
+                          .map(a => ({
+                            busLineId: pendingBatchData.busLineId,
+                            busId: pendingBatchData.busId,
+                            driverId: a.assignedDriverId,
+                            startTime: a.time,
+                            weekdays: pendingBatchData.weekdays,
+                          }))
+
+                        const res = await client.post('/admin/schedules/bulk', { schedules })
+                        setMessage(`✓ ${res.data.createdCount || schedules.length} diensten aangemaakt met chauffeurs`)
+                        setShowDriverAssignment(false)
+                        setPendingBatchData(null)
+                        resetForm()
+                        onScheduleChange?.()
+                      } catch (err) {
+                        const errMsg = err.response?.data?.error || err.message
+                        setMessage('Error: ' + errMsg)
+                      }
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: '#4caf50',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Opslaan
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

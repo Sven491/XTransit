@@ -155,7 +155,9 @@ class _RecurringSchedulesScreenState extends State<RecurringSchedulesScreen> {
             );
           }
 
-          final schedules = snapshot.data ?? [];
+          final allSchedules = snapshot.data ?? [];
+          // Filter to show only truly recurring schedules (with weekdays > 0)
+          final schedules = allSchedules.where((s) => s.weekdays.isNotEmpty).toList();
 
           if (schedules.isEmpty) {
             return Center(
@@ -165,8 +167,15 @@ class _RecurringSchedulesScreenState extends State<RecurringSchedulesScreen> {
                   Icon(Icons.event_note_outlined, size: 48, color: colorScheme.outline),
                   const SizedBox(height: 16),
                   Text(
-                    'Geen vaste diensten gevonden',
+                    'Geen herhaalde diensten gevonden',
                     style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Herhaalde diensten worden hier weergegeven',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
                   ),
                 ],
               ),

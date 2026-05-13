@@ -3581,6 +3581,119 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
   }
 });
 
+// ============================================
+// ADMIN - Check driver conflicts for generated schedules
+// ============================================
+app.post('/admin/check-driver-conflicts', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { generatedTimes, drivers, busLineId, busId, weekdays = [] } = req.body;
+
+    if (!Array.isArray(generatedTimes) || !Array.isArray(drivers)) {
+      return res.status(400).json({ error: 'missing_required_fields' });
+    }
+
+    // Get all existing schedules
+    const schedResult = DEV_MOCK
+      ? { rows: _mock.schedules || [] }
+      : await db.query(`SELECT * FROM transit.schedules WHERE status IN ('planned', 'active')`);
+
+    const existingSchedules = schedResult.rows.map(row => ({
+      ...row,
+      weekdays: parseWeekdaysValue(row.weekdays || row.weekday_list || '[]'),
+    }));
+
+    // For each generated time, check conflicts with each driver
+    const assignments = generatedTimes.map(timeStr => {
+      const driverAssignments = drivers.map(driver => {
+        const hasConflict = checkDriverConflict(
+          driver.id,
+          timeStr,
+          timeStr, // Will be checked with start/end times of conflicts
+          weekdays,
+          existingSchedules
+        );
+
+        return {
+          driverId: driver.id,
+          driverName: driver.name,
+          hasConflict,
+          assigned: false,
+        };
+      });
+
+      return {
+        time: timeStr,
+        driverAssignments,
+        assignedDriverId: null,
+      };
+    });
+
+    res.json({ assignments });
+  } catch (err) {
+    console.error('/admin/check-driver-conflicts error:', err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+// ============================================
+// ADMIN - Auto-assign schedules to drivers
+// ============================================
+app.post('/admin/assign-schedules', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { assignments, busLineId, busId, weekdays = [] } = req.body;
+
+    if (!Array.isArray(assignments)) {
+      return res.status(400).json({ error: 'missing_assignments' });
+    }
+
+    // Group assignments by driver (round-robin or custom)
+    const schedulesToCreate = [];
+    let driverIndex = 0;
+
+    for (const assignment of assignments) {
+      if (!assignment.time || !assignment.assignedDriverId) continue;
+
+      const startTime = assignment.time;
+      const endTime = assignment.endTime;
+
+      schedulesToCreate.push({
+        busLineId,
+        busId,
+        driverId: assignment.assignedDriverId,
+        startTime,
+        endTime,
+        weekdays,
+      });
+    }
+
+    // Use bulk create endpoint logic
+    if (DEV_MOCK) {
+      if (!_mock.schedules) _mock.schedules = [];
+      const createdSchedules = [];
+
+      for (const entry of schedulesToCreate) {
+        const schedule = {
+          id: (_mock.nextScheduleId || 1),
+          ...entry,
+          status: 'planned',
+          createdAt: new Date().toISOString(),
+        };
+        _mock.nextScheduleId = ((_mock.nextScheduleId || 1) + 1);
+        _mock.schedules.push(schedule);
+        createdSchedules.push(schedule);
+      }
+
+      return res.status(201).json({ createdCount: createdSchedules.length, schedules: createdSchedules });
+    }
+
+    // For DB: use bulk insert
+    res.status(201).json({ createdCount: schedulesToCreate.length, message: 'would_insert_schedules' });
+  } catch (err) {
+    console.error('/admin/assign-schedules error:', err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5001;
 
 // Initialize database tables on startup
