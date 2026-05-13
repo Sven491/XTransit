@@ -6,6 +6,7 @@ import '../models/navigation.dart';
 import '../services/auth_service.dart';
 import '../services/schedule_service.dart';
 import '../screens/navigation_screen.dart';
+import '../screens/recurring_schedules_screen.dart';
 
 class ScheduleOverviewScreen extends StatefulWidget {
   const ScheduleOverviewScreen({super.key});
@@ -14,17 +15,25 @@ class ScheduleOverviewScreen extends StatefulWidget {
   State<ScheduleOverviewScreen> createState() => _ScheduleOverviewScreenState();
 }
 
-class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
+class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> with TickerProviderStateMixin {
   final _scheduleService = ScheduleService();
   final _authService = AuthService();
 
   late Future<List<sched.ServiceSchedule>> _scheduleFuture;
   DateTime _selectedDate = DateTime.now();
+  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
     _scheduleFuture = _scheduleService.getSchedules(_selectedDate);
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   Future<void> _handleLogout() async {
@@ -117,10 +126,7 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
                       onPressed: () async {
                         try {
                           await _scheduleService.updateScheduleStatus(svc.id, 'in_progress');
-
                           if (!mounted) return;
-
-                          // Close the sheet and start navigation with provided stops
                           Navigator.of(sheetContext).pop();
 
                           final routeObj = sched.Route(
@@ -210,13 +216,19 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final dateStr =
-        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Today on the Road'),
+        title: const Text('Diensten'),
+        centerTitle: true,
         elevation: 0,
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(icon: Icon(Icons.calendar_today), text: 'Dagschema'),
+            Tab(icon: Icon(Icons.repeat), text: 'Vaste diensten'),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -225,174 +237,179 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> {
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: Theme.of(context).brightness == Brightness.dark
-                ? const [Color(0xFF0B1220), Color(0xFF111827)]
-                : const [Color(0xFFF1F5F9), Color(0xFFE2E8F0)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _DailyScheduleTab(
+            scheduleService: _scheduleService,
+            selectedDate: _selectedDate,
+            onSelectDate: _selectDate,
+            onRefresh: _refreshSchedules,
+            onShowDetails: _showScheduleDetails,
+            scheduleFuture: _scheduleFuture,
           ),
+          const RecurringSchedulesScreen(),
+        ],
+      ),
+    );
+  }
+}
+
+class _DailyScheduleTab extends StatelessWidget {
+  final ScheduleService scheduleService;
+  final DateTime selectedDate;
+  final VoidCallback onSelectDate;
+  final VoidCallback onRefresh;
+  final Function(sched.ServiceSchedule) onShowDetails;
+  final Future<List<sched.ServiceSchedule>> scheduleFuture;
+
+  const _DailyScheduleTab({
+    required this.scheduleService,
+    required this.selectedDate,
+    required this.onSelectDate,
+    required this.onRefresh,
+    required this.onShowDetails,
+    required this.scheduleFuture,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final dateStr =
+        '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: Theme.of(context).brightness == Brightness.dark
+              ? const [Color(0xFF0B1220), Color(0xFF111827)]
+              : const [Color(0xFFF1F5F9), Color(0xFFE2E8F0)],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
         ),
-        child: Column(
-          children: [
-            Container(
-              margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0F172A), Color(0xFF1D4ED8)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.16),
-                    blurRadius: 22,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF0F172A), Color(0xFF1D4ED8)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Geplande diensten',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Colors.white.withOpacity(0.78),
-                        ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    dateStr,
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                        ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Automatisch berekende eindtijden, haltes en herhalende weekdagen',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.white.withOpacity(0.84),
-                        ),
-                  ),
-                  const SizedBox(height: 14),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: SizedBox(
-                      height: 48,
-                      child: OutlinedButton.icon(
-                        onPressed: _selectDate,
-                        icon: const Icon(Icons.calendar_today, size: 18),
-                        label: const Text('Wijzig datum'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: BorderSide(color: Colors.white.withOpacity(0.28)),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                        ),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.16),
+                  blurRadius: 22,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Geplande diensten',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Colors.white.withOpacity(0.78),
+                      ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  dateStr,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Automatisch berekende eindtijden, haltes en herhalende weekdagen',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Colors.white.withOpacity(0.84),
+                      ),
+                ),
+                const SizedBox(height: 14),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      onPressed: onSelectDate,
+                      icon: const Icon(Icons.calendar_today, size: 18),
+                      label: const Text('Wijzig datum'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: BorderSide(color: Colors.white.withOpacity(0.28)),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            Expanded(
-                  child: FutureBuilder<List<sched.ServiceSchedule>>(
-                future: _scheduleFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
+          ),
+          Expanded(
+            child: FutureBuilder<List<sched.ServiceSchedule>>(
+              future: scheduleFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
 
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.error_outline,
-                              size: 64,
-                              color: colorScheme.error,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Failed to load schedule',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              snapshot.error.toString(),
-                              style: Theme.of(context).textTheme.bodySmall,
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 24),
-                            FilledButton.icon(
-                              onPressed: _refreshSchedules,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Retry'),
-                            ),
-                          ],
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.error_outline, size: 48, color: colorScheme.error),
+                        const SizedBox(height: 16),
+                        Text('Fout bij laden: ${snapshot.error}', textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: onRefresh,
+                          child: const Text('Opnieuw proberen'),
                         ),
-                      ),
-                    );
-                  }
-
-                  final schedules = snapshot.data ?? [];
-                  if (schedules.isEmpty) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.calendar_today,
-                              size: 64,
-                              color: colorScheme.outline,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'No routes scheduled',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Check back later for your schedule',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }
-
-                  return RefreshIndicator(
-                    onRefresh: _refreshSchedules,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      itemCount: schedules.length,
-                      itemBuilder: (context, index) {
-                        final schedule = schedules[index];
-                        return _ScheduleSummaryCard(
-                          schedule: schedule,
-                          onTap: () => _showScheduleDetails(schedule),
-                        );
-                      },
+                      ],
                     ),
                   );
-                },
-              ),
+                }
+
+                final schedules = snapshot.data ?? [];
+                if (schedules.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.event_available_outlined, size: 48, color: colorScheme.outline),
+                        const SizedBox(height: 16),
+                        Text('Geen diensten op $dateStr', style: Theme.of(context).textTheme.titleMedium),
+                      ],
+                    ),
+                  );
+                }
+
+                return RefreshIndicator(
+                  onRefresh: () async => onRefresh(),
+                  child: ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(0, 12, 0, 24),
+                    itemCount: schedules.length,
+                    itemBuilder: (context, index) {
+                      final schedule = schedules[index];
+                      return _ScheduleSummaryCard(
+                        schedule: schedule,
+                        onTap: () => onShowDetails(schedule),
+                      );
+                    },
+                  ),
+                );
+              },
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -446,7 +463,9 @@ class _ScheduleSummaryCard extends StatelessWidget {
                           ),
                     ),
                   ),
-                  _InfoChip(label: schedule.status),
+                  // Only show status for one-time schedules; recurring schedules have no fixed status
+                  if (!schedule.isRecurring)
+                    _InfoChip(label: schedule.status),
                 ],
               ),
               const SizedBox(height: 16),

@@ -240,6 +240,35 @@ function expandRecurringScheduleRows(rows) {
   return expandedRows;
 }
 
+function mapAdminScheduleRow(row, routeStopsByLine = new Map()) {
+  const weekdays = parseWeekdaysValue(row.weekdays);
+  const busLineId = Number(row.busLineId ?? row.bus_line_id);
+  const startTime = row.startTime ?? row.start_time;
+  const routeStops = routeStopsByLine.get(busLineId) || [];
+  const departureTimes = buildDepartureTimes(startTime, routeStops);
+
+  return {
+    id: Number(row.id),
+    busLineId,
+    busId: Number(row.busId ?? row.bus_id),
+    driverId: row.driverId !== null && row.driverId !== undefined ? Number(row.driverId) : null,
+    driverName: row.driverName ?? row.driver_name ?? null,
+    startTime,
+    endTime: row.endTime ?? row.end_time,
+    weekdays,
+    departureTimes,
+    status: row.status,
+    lineNumber: Number(row.lineNumber ?? row.line_number) || null,
+    busName: row.busName ?? row.bus_name ?? 'Unknown Bus',
+    licensePlate: row.licensePlate ?? row.license_plate ?? null,
+    createdAt: row.createdAt ?? row.created_at ?? null,
+    isRecurringInstance: row.is_recurring_instance || false,
+    templateId: row.template_id || row.templateId || null,
+    recurrenceLabel: formatWeekdayLabel(weekdays),
+    isRecurring: weekdays.length > 0,
+  };
+}
+
 function scheduleMatchesFilters(schedule, filters, routeStopsByLine = new Map()) {
   if (!schedule || !filters) return true;
 
@@ -614,7 +643,7 @@ async function ensureScheduleStopProgressTable() {
         AND tc.table_name = 'schedule_stop_progress'
         AND tc.constraint_type = 'UNIQUE'
       GROUP BY tc.constraint_name
-      HAVING array_agg(kcu.column_name ORDER BY kcu.ordinal_position) = ARRAY['schedule_id', 'stop_order']
+      HAVING array_agg(kcu.column_name ORDER BY kcu.ordinal_position)::text[] = ARRAY['schedule_id', 'stop_order']::text[]
       LIMIT 1;
 
       IF constraint_name IS NOT NULL THEN
@@ -1972,6 +2001,8 @@ app.get('/admin/drivers', authMiddleware, adminMiddleware, async (req, res) => {
 // ============================================
 app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) => {
   try {
+    const templatesOnly = String(req.query.templates || req.query.includeTemplates || '').toLowerCase() === 'true' || String(req.query.templates || req.query.includeTemplates || '') === '1';
+
     if (DEV_MOCK) {
       const routeStopsByLine = new Map();
       for (const routeStop of _mock.routeStops || []) {
@@ -1985,7 +2016,7 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
         });
       }
 
-      const schedules = expandRecurringScheduleRows((_mock.schedules || []).map(s => {
+      const rawSchedules = (_mock.schedules || []).map(s => {
         const busLine = _mock.busLines.find(bl => bl.id === s.busLineId);
         const bus = _mock.fleetBuses.find(b => b.id === s.busId);
         return {
@@ -2001,7 +2032,9 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
           driverId: s.driverId || null,
           estimatedDurationMinutes: busLine?.estimatedDurationMinutes || 60,
         };
-      }))
+      });
+
+      const schedules = (templatesOnly ? rawSchedules : expandRecurringScheduleRows(rawSchedules))
         .filter(row => scheduleMatchesFilters(row, parseScheduleFilters(req.query), routeStopsByLine))
         .map(s => ({
           ...s,
@@ -2080,48 +2113,13 @@ app.get('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =>
     }
 
     const filters = parseScheduleFilters(req.query);
-    const expandedSchedules = expandRecurringScheduleRows(result.rows)
+    const rowSource = templatesOnly ? result.rows : expandRecurringScheduleRows(result.rows)
+    const expandedSchedules = rowSource
       .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
 
-    const schedules = expandedSchedules.map(row => {
-      const weekdays = parseWeekdaysValue(row.weekdays);
-      const busLineId = Number(row.bus_line_id);
-      const lineRouteStops = routeStopsByLine.get(busLineId) || [];
-      const startDate = new Date(row.start_time);
-
-      const departureTimes = lineRouteStops.map(routeStop => {
-        const departureDate = new Date(startDate);
-        const etaMinutes = Number(routeStop.estimated_arrival_minutes) || 0;
-        departureDate.setMinutes(departureDate.getMinutes() + etaMinutes);
-
-        return {
-          order: Number(routeStop.stop_order),
-          stopId: Number(routeStop.stop_id),
-          stopName: routeStop.stop_name || 'Unknown Stop',
-          estimatedArrivalMinutes: etaMinutes,
-          departureTime: departureDate.toISOString(),
-        };
-      });
-
-      return {
-        id: Number(row.id),
-        busLineId,
-        busId: Number(row.bus_id),
-        driverId: row.driver_id !== null && row.driver_id !== undefined ? Number(row.driver_id) : null,
-        driverName: row.driver_name || null,
-        startTime: row.start_time,
-        endTime: row.end_time,
-        weekdays,
-        departureTimes,
-        status: row.status,
-        lineNumber: row.line_number,
-        busName: row.bus_name,
-        licensePlate: row.license_plate,
-        createdAt: row.created_at,
-        isRecurringInstance: row.is_recurring_instance || false,
-        templateId: row.template_id || null,
-      };
-    }).sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+    const schedules = expandedSchedules
+      .map(row => mapAdminScheduleRow(row, routeStopsByLine))
+      .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
     res.json({ schedules });
   } catch (err) {
@@ -2230,6 +2228,125 @@ app.post('/admin/schedules', authMiddleware, adminMiddleware, async (req, res) =
         endTime: schedule.end_time,
         weekdays: weekdaysResult,
         departureTimes,
+        status: schedule.status,
+        createdAt: schedule.created_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
+app.put('/admin/schedules/:scheduleId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const { busLineId, busId, driverId, startTime, weekdays } = req.body;
+
+    if (!scheduleId || !Number.isFinite(Number(scheduleId))) {
+      return res.status(400).json({ error: 'invalid_schedule_id' });
+    }
+
+    if (!busLineId || !busId || !startTime) {
+      return res.status(400).json({ error: 'missing_required_fields: busLineId, busId, startTime required' });
+    }
+
+    const scheduleWeekdays = Array.isArray(weekdays) && weekdays.length > 0
+      ? weekdays.map(w => Number(w)).filter(w => w >= 0 && w <= 6)
+      : [];
+
+    if (DEV_MOCK) {
+      const index = (_mock.schedules || []).findIndex(s => Number(s.id) === Number(scheduleId));
+      if (index === -1) {
+        return res.status(404).json({ error: 'schedule_not_found' });
+      }
+
+      const busLine = _mock.busLines.find(bl => bl.id == busLineId);
+      if (!busLine) {
+        return res.status(404).json({ error: 'bus_line_not_found' });
+      }
+
+      const startDate = new Date(startTime);
+      const endDate = new Date(startDate);
+      endDate.setMinutes(endDate.getMinutes() + (busLine.estimatedDurationMinutes || 60));
+
+      _mock.schedules[index] = {
+        ..._mock.schedules[index],
+        busLineId: Number(busLineId),
+        busId: Number(busId),
+        driverId: driverId ? Number(driverId) : null,
+        startTime,
+        endTime: endDate.toISOString(),
+        weekdays: scheduleWeekdays,
+      };
+
+      return res.json({ schedule: _mock.schedules[index] });
+    }
+
+    const existingResult = await db.query(`
+      SELECT id, status
+      FROM transit.schedules
+      WHERE id = $1
+    `, [scheduleId]);
+
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    const busLine = await db.query('SELECT estimated_duration_minutes FROM transit.bus_lines WHERE id = $1', [busLineId]);
+    if (!busLine.rows[0]) {
+      return res.status(404).json({ error: 'bus_line_not_found' });
+    }
+
+    const startDate = new Date(startTime);
+    const endDate = new Date(startDate);
+    endDate.setMinutes(endDate.getMinutes() + (busLine.rows[0].estimated_duration_minutes || 60));
+
+    const hasWeekdaysColumn = await db.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema='transit' AND table_name='schedules' AND column_name='weekdays'
+    `);
+
+    let result;
+    if (hasWeekdaysColumn.rows.length > 0) {
+      result = await db.query(`
+        UPDATE transit.schedules
+        SET
+          bus_line_id = $2,
+          bus_id = $3,
+          driver_id = $4,
+          start_time = $5,
+          end_time = $6,
+          weekdays = $7,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, weekdays, created_at
+      `, [scheduleId, busLineId, busId, driverId || null, startTime, endDate.toISOString(), JSON.stringify(scheduleWeekdays)]);
+    } else {
+      result = await db.query(`
+        UPDATE transit.schedules
+        SET
+          bus_line_id = $2,
+          bus_id = $3,
+          driver_id = $4,
+          start_time = $5,
+          end_time = $6,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, created_at
+      `, [scheduleId, busLineId, busId, driverId || null, startTime, endDate.toISOString()]);
+    }
+
+    const schedule = result.rows[0];
+    return res.json({
+      schedule: {
+        id: Number(schedule.id),
+        busLineId: Number(schedule.bus_line_id),
+        busId: Number(schedule.bus_id),
+        driverId: schedule.driver_id !== null && schedule.driver_id !== undefined ? Number(schedule.driver_id) : null,
+        startTime: schedule.start_time,
+        endTime: schedule.end_time,
+        weekdays: parseWeekdaysValue(schedule.weekdays),
         status: schedule.status,
         createdAt: schedule.created_at,
       },
@@ -3191,6 +3308,17 @@ app.get('/public/schedules/:scheduleId/progress', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => console.log(`Transit API listening on ${PORT}`));
+
+// Initialize database tables on startup
+(async () => {
+  try {
+    await ensureScheduleStopProgressTable();
+    console.log('✓ Database tables initialized');
+  } catch (err) {
+    console.error('⚠ Error initializing tables:', err.message);
+  }
+  
+  app.listen(PORT, () => console.log(`Transit API listening on ${PORT}`));
+})();
 
 module.exports = app;

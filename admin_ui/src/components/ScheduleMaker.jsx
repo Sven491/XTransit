@@ -4,9 +4,22 @@ import { transitClient } from '../api'
 const WEEKDAYS = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo']
 const WEEKDAY_VALUES = [1, 2, 3, 4, 5, 6, 0] // 0=Sun, 1=Mon...
 
+const toInputDate = (value) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().split('T')[0]
+  return date.toISOString().split('T')[0]
+}
+
+const toInputTime = (value) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '08:00'
+  return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`
+}
+
 export default function ScheduleMaker({ token, user }) {
   const client = transitClient(token)
   const [schedules, setSchedules] = useState([])
+  const [scheduleTemplates, setScheduleTemplates] = useState([])
   const [overviewSchedules, setOverviewSchedules] = useState([])
   const [busLines, setBusLines] = useState([])
   const [buses, setBuses] = useState([])
@@ -16,6 +29,7 @@ export default function ScheduleMaker({ token, user }) {
   const [isAdmin] = useState(Boolean(user?.userCode))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [expandedSchedule, setExpandedSchedule] = useState(null)
+  const [editingScheduleId, setEditingScheduleId] = useState(null)
   const [routeStopsByLine, setRouteStopsByLine] = useState({})
 
   // Form state
@@ -33,6 +47,15 @@ export default function ScheduleMaker({ token, user }) {
       setSchedules(res.data.schedules || [])
     } catch (err) {
       setMessage('Error loading schedules: ' + (err.response?.data?.error || err.message))
+    }
+  }
+
+  const loadScheduleTemplates = async () => {
+    try {
+      const res = await client.get('/admin/schedules?templates=1')
+      setScheduleTemplates((res.data.schedules || []).filter(schedule => Array.isArray(schedule.weekdays) && schedule.weekdays.length > 0))
+    } catch (err) {
+      setMessage('Error loading fixed schedules: ' + (err.response?.data?.error || err.message))
     }
   }
 
@@ -79,6 +102,7 @@ export default function ScheduleMaker({ token, user }) {
 
   useEffect(() => {
     loadSchedules()
+    loadScheduleTemplates()
     loadBusLines()
     loadBuses()
     loadDrivers()
@@ -88,7 +112,28 @@ export default function ScheduleMaker({ token, user }) {
     loadOverviewSchedules()
   }, [overviewDate, selectedDriverFilter])
 
-  const createSchedule = async (e) => {
+  const resetScheduleForm = () => {
+    setEditingScheduleId(null)
+    setSelectedLine('')
+    setSelectedBus('')
+    setStartTime('08:00')
+    setDriverId('')
+    setSelectedWeekdays([])
+  }
+
+  const startEditingSchedule = (schedule) => {
+    setMessage(null)
+    setEditingScheduleId(schedule.id)
+    setSelectedLine(String(schedule.busLineId))
+    setSelectedBus(String(schedule.busId))
+    setDriverId(schedule.driverId ? String(schedule.driverId) : '')
+    setSelectedDate(toInputDate(schedule.startTime))
+    setStartTime(toInputTime(schedule.startTime))
+    setSelectedWeekdays(Array.isArray(schedule.weekdays) ? [...schedule.weekdays] : [])
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const submitSchedule = async (e) => {
     e.preventDefault()
     setMessage(null)
 
@@ -100,25 +145,27 @@ export default function ScheduleMaker({ token, user }) {
     try {
       const startDateTime = `${selectedDate}T${startTime}:00`
       const normalizedWeekdays = [...selectedWeekdays].sort((a, b) => a - b)
-
-      const res = await client.post('/admin/schedules', {
+      const payload = {
         busLineId: Number(selectedLine),
         busId: Number(selectedBus),
         driverId: driverId ? Number(driverId) : null,
         startTime: startDateTime,
         weekdays: normalizedWeekdays,
-      })
+      }
+
+      const res = editingScheduleId
+        ? await client.put(`/admin/schedules/${editingScheduleId}`, payload)
+        : await client.post('/admin/schedules', payload)
 
       const dayLabels = normalizedWeekdays.length > 0
         ? normalizedWeekdays.map(d => WEEKDAYS[WEEKDAY_VALUES.indexOf(d)]).join(', ')
         : 'eenmalig'
-      setMessage(`Dienst aangemaakt: #${res.data.schedule.id} (${dayLabels})`)
-      setSelectedLine('')
-      setSelectedBus('')
-      setStartTime('08:00')
-      setDriverId('')
-      setSelectedWeekdays([])
+      setMessage(editingScheduleId
+        ? `Dienst bijgewerkt: #${res.data.schedule.id} (${dayLabels})`
+        : `Dienst aangemaakt: #${res.data.schedule.id} (${dayLabels})`)
+      resetScheduleForm()
       await loadSchedules()
+      await loadScheduleTemplates()
       await loadOverviewSchedules()
     } catch (err) {
       const errMsg = err.response?.data?.error || err.message
@@ -132,7 +179,11 @@ export default function ScheduleMaker({ token, user }) {
       await client.delete(`/admin/schedules/${scheduleId}`)
       setMessage(`Dienst verwijderd: Lijn ${lineNumber}, ${busName}`)
       setDeleteConfirm(null)
+      if (editingScheduleId === scheduleId) {
+        resetScheduleForm()
+      }
       await loadSchedules()
+      await loadScheduleTemplates()
       await loadOverviewSchedules()
     } catch (err) {
       const errMsg = err.response?.data?.error || err.message
@@ -270,7 +321,21 @@ export default function ScheduleMaker({ token, user }) {
       </div>
 
       {isAdmin && (
-        <form onSubmit={createSchedule} className="stack-form">
+        <form onSubmit={submitSchedule} className="stack-form">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+            <div>
+              <h3 style={{ margin: 0 }}>{editingScheduleId ? 'Vaste dienst bewerken' : 'Dienst aanmaken'}</h3>
+              <p style={{ margin: '0.25rem 0 0', color: '#666' }}>
+                {editingScheduleId ? 'Werk de bestaande dienst bij en sla de wijzigingen op.' : 'Maak een nieuwe dienst of vaste herhaling aan.'}
+              </p>
+            </div>
+            {editingScheduleId && (
+              <button type="button" className="secondary" onClick={resetScheduleForm}>
+                Bewerken annuleren
+              </button>
+            )}
+          </div>
+
           <div className="form-row">
             <select value={selectedLine} onChange={e => setSelectedLine(e.target.value)}>
               <option value="">Kies lijn</option>
@@ -339,7 +404,7 @@ export default function ScheduleMaker({ token, user }) {
           </div>
 
           <div className="form-row">
-            <button type="submit">Dienst Aanmaken</button>
+            <button type="submit">{editingScheduleId ? 'Dienst bijwerken' : 'Dienst aanmaken'}</button>
           </div>
         </form>
       )}
@@ -522,6 +587,51 @@ export default function ScheduleMaker({ token, user }) {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <h3 style={{ marginTop: '2rem' }}>Vaste diensten beheren</h3>
+      <p style={{ marginTop: 0, color: '#666' }}>
+        Pas bestaande vaste diensten aan of verwijder ze direct vanuit dit overzicht.
+      </p>
+      <div style={{ display: 'grid', gap: '1rem' }}>
+        {scheduleTemplates.length === 0 ? (
+          <div className="message">Nog geen vaste diensten gevonden.</div>
+        ) : (
+          scheduleTemplates
+            .slice()
+            .sort((a, b) => a.lineNumber - b.lineNumber || new Date(a.startTime) - new Date(b.startTime))
+            .map(schedule => (
+              <article key={`template-${schedule.id}`} className="schedule-card" style={{ position: 'relative' }}>
+                <div className="schedule-header">
+                  <strong>Lijn {schedule.lineNumber}</strong>
+                  <span className="schedule-time">
+                    {formatTime(schedule.startTime)} - {formatTime(schedule.endTime)}
+                  </span>
+                </div>
+                <div className="schedule-details">
+                  <div>{schedule.busName}</div>
+                  <div className="schedule-plate">{schedule.licensePlate}</div>
+                  {schedule.driverName && (
+                    <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                      {schedule.driverName}
+                    </div>
+                  )}
+                  <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                    {schedule.recurrenceLabel || getWeekdayLabel(schedule.weekdays)}
+                  </div>
+                </div>
+
+                <div className="form-row" style={{ marginTop: '0.75rem' }}>
+                  <button type="button" className="secondary" onClick={() => startEditingSchedule(schedule)}>
+                    Bewerken
+                  </button>
+                  <button type="button" className="danger" onClick={() => setDeleteConfirm(schedule)}>
+                    Verwijderen
+                  </button>
+                </div>
+              </article>
+            ))
+        )}
       </div>
 
       {message && <div className="message">{message}</div>}
