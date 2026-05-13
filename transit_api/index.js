@@ -2736,6 +2736,138 @@ app.get('/schedules/overview', async (req, res) => {
   }
 });
 
+// ============================================
+// PUBLIC - Get all recurring schedule templates (no date filtering)
+// ============================================
+app.get('/schedules/recurring', async (req, res) => {
+  try {
+    const filters = parseScheduleFilters(req.query);
+
+    if (DEV_MOCK) {
+      const routeStopsByLine = new Map();
+
+      for (const routeStop of _mock.routeStops || []) {
+        const busLineId = Number(routeStop.busLineId);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
+        }
+
+        routeStopsByLine.get(busLineId).push({
+          bus_line_id: busLineId,
+          stop_id: routeStop.stopId,
+          stop_order: routeStop.stopOrder,
+          estimated_arrival_minutes: routeStop.estimatedArrivalMinutes,
+          stop_name: routeStop.name || '',
+        });
+      }
+
+      const baseRows = (_mock.schedules || [])
+        .filter(schedule => Array.isArray(schedule.weekdays) && schedule.weekdays.length > 0)
+        .map(schedule => {
+          const busLine = _mock.busLines.find(line => Number(line.id) === Number(schedule.busLineId));
+          const bus = _mock.fleetBuses.find(vehicle => Number(vehicle.id) === Number(schedule.busId));
+          const driver = _mock.drivers.find(person => Number(person.id) === Number(schedule.driverId));
+
+          return {
+            id: schedule.id,
+            busLineId: schedule.busLineId,
+            busId: schedule.busId,
+            driverId: schedule.driverId ?? null,
+            driverName: driver ? driver.name : null,
+            startTime: schedule.startTime,
+            endTime: schedule.endTime,
+            weekdays: schedule.weekdays || [],
+            lineNumber: busLine?.lineNumber || 0,
+            busName: bus?.name || 'Unknown Bus',
+            licensePlate: bus?.licensePlate || '',
+            createdAt: schedule.createdAt,
+          };
+        });
+
+      const schedules = baseRows
+        .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine))
+        .map(row => {
+          const materialized = materializeScheduleOverviewRow(row, null, routeStopsByLine);
+          return {
+            ...materialized,
+            status: undefined,
+          };
+        });
+
+      return res.json({ schedules });
+    }
+
+    const hasWeekdaysColumn = await db.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'transit' AND table_name = 'schedules' AND column_name = 'weekdays'
+    `);
+
+    if (hasWeekdaysColumn.rows.length === 0) {
+      return res.json({ schedules: [] });
+    }
+
+    const result = await db.query(`
+      SELECT
+        s.id,
+        s.bus_line_id AS "busLineId",
+        s.bus_id AS "busId",
+        s.driver_id AS "driverId",
+        s.start_time AS "startTime",
+        s.end_time AS "endTime",
+        s.weekdays,
+        bl.line_number AS "lineNumber",
+        b.name AS "busName",
+        b.license_plate AS "licensePlate",
+        TRIM(COALESCE(e.firstname, '') || ' ' || COALESCE(e.lastname, '')) AS "driverName",
+        s.created_at AS "createdAt"
+      FROM transit.schedules s
+      LEFT JOIN transit.bus_lines bl ON s.bus_line_id = bl.id
+      LEFT JOIN fleet.bus b ON s.bus_id = b.id
+      LEFT JOIN workers.employees e ON s.driver_id = e.id
+      WHERE s.weekdays IS NOT NULL
+    `);
+
+    const lineIds = Array.from(new Set(result.rows.map(row => Number(row.busLineId)).filter(Number.isFinite)));
+    const routeStopsByLine = new Map();
+
+    if (lineIds.length > 0) {
+      const routeStopsResult = await db.query(`
+        SELECT
+          rs.bus_line_id,
+          rs.stop_id,
+          rs.stop_order,
+          rs.estimated_arrival_minutes,
+          s.name AS stop_name
+        FROM transit.route_stops rs
+        JOIN transit.stops s ON s.id = rs.stop_id
+        WHERE rs.bus_line_id = ANY($1::int[])
+        ORDER BY rs.bus_line_id ASC, rs.stop_order ASC
+      `, [lineIds]);
+
+      for (const row of routeStopsResult.rows) {
+        const busLineId = Number(row.bus_line_id);
+        if (!routeStopsByLine.has(busLineId)) {
+          routeStopsByLine.set(busLineId, []);
+        }
+        routeStopsByLine.get(busLineId).push(row);
+      }
+    }
+
+    const schedules = result.rows
+      .filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine))
+      .map(row => {
+        const schedule = materializeScheduleOverviewRow(row, null, routeStopsByLine);
+        delete schedule.status;
+        return schedule;
+      });
+
+    res.json({ schedules });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal_error', details: err.message });
+  }
+});
+
 app.get('/schedules/:scheduleId', async (req, res) => {
   try {
     const { scheduleId } = req.params;

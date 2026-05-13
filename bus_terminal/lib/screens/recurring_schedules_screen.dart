@@ -24,10 +24,7 @@ class _RecurringSchedulesScreenState extends State<RecurringSchedulesScreen> {
   }
 
   void _loadRecurringSchedules() {
-    // Load schedules from a reference date, then filter for recurring ones
-    _schedulesFuture = _scheduleService.getSchedules(DateTime.now()).then((schedules) {
-      return schedules.where((s) => s.isRecurring).toList();
-    });
+    _schedulesFuture = _scheduleService.getRecurringSchedules();
   }
 
   String _formatWeekdays(List<int> weekdays) {

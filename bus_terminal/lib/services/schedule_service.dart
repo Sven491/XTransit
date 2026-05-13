@@ -38,6 +38,31 @@ class ScheduleService {
     }
   }
 
+  /// Get all recurring schedule templates, independent of a specific date.
+  Future<List<ServiceSchedule>> getRecurringSchedules({int? lineId}) async {
+    try {
+      final queryParameters = <String, String>{};
+      if (lineId != null) {
+        queryParameters['lineId'] = lineId.toString();
+      }
+
+      final uri = Uri.parse('$_apiBaseUrl/schedules/recurring').replace(queryParameters: queryParameters);
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return (data['schedules'] as List? ?? [])
+            .map((schedule) => schedule as Map<String, dynamic>)
+            .map(ServiceSchedule.fromJson)
+            .toList();
+      }
+
+      throw Exception('Failed to load recurring schedules: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('Recurring schedule error: $e');
+    }
+  }
+
   /// Get stop list for a specific schedule.
   Future<List<ScheduleStop>> getScheduleStops(int scheduleId) async {
     try {

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 
 export default function TimetableViewer({ apiBaseUrl = 'http://localhost:5001' }) {
   const [schedules, setSchedules] = useState([])
+  const [summary, setSummary] = useState(null)
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
   const [selectedLineId, setSelectedLineId] = useState('')
   const [lines, setLines] = useState([])
@@ -28,13 +29,14 @@ export default function TimetableViewer({ apiBaseUrl = 'http://localhost:5001' }
       setLoading(true)
       setError(null)
       try {
-        let url = `${apiBaseUrl}/schedules?date=${selectedDate}`
+        let url = `${apiBaseUrl}/schedules/overview?date=${selectedDate}`
         if (selectedLineId) {
           url += `&lineId=${selectedLineId}`
         }
         const res = await fetch(url)
         const data = await res.json()
         setSchedules(data.schedules || [])
+        setSummary(data.summary || null)
       } catch (err) {
         setError('Failed to load schedules: ' + err.message)
       } finally {
@@ -72,6 +74,20 @@ export default function TimetableViewer({ apiBaseUrl = 'http://localhost:5001' }
         </select>
       </div>
 
+      {summary && (
+        <div style={{ marginBottom: '16px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+          <span style={{ padding: '6px 10px', borderRadius: '999px', backgroundColor: '#eef2ff', color: '#3730a3' }}>
+            Total: {summary.total}
+          </span>
+          <span style={{ padding: '6px 10px', borderRadius: '999px', backgroundColor: '#ecfeff', color: '#155e75' }}>
+            Vast: {summary.recurring}
+          </span>
+          <span style={{ padding: '6px 10px', borderRadius: '999px', backgroundColor: '#f8fafc', color: '#334155' }}>
+            Eenmalig: {summary.oneTime}
+          </span>
+        </div>
+      )}
+
       {loading && <p>Loading schedules...</p>}
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
@@ -81,7 +97,8 @@ export default function TimetableViewer({ apiBaseUrl = 'http://localhost:5001' }
             <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Time</th>
             <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Line</th>
             <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Vehicle</th>
-            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Status</th>
+            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Day status</th>
+            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #ddd' }}>Delay</th>
           </tr>
         </thead>
         <tbody>
@@ -104,13 +121,18 @@ export default function TimetableViewer({ apiBaseUrl = 'http://localhost:5001' }
                     style={{
                       padding: '4px 8px',
                       borderRadius: '4px',
-                      backgroundColor: schedule.status === 'active' ? '#dcfce7' : '#f3f4f6',
-                      color: schedule.status === 'active' ? '#166534' : '#374151',
+                      backgroundColor: schedule.status === 'in_progress' ? '#dbeafe' : schedule.status === 'completed' ? '#dcfce7' : '#f3f4f6',
+                      color: schedule.status === 'in_progress' ? '#1d4ed8' : schedule.status === 'completed' ? '#166534' : '#374151',
                       fontSize: '0.9rem',
                     }}
                   >
                     {schedule.status}
                   </span>
+                </td>
+                <td style={{ padding: '12px' }}>
+                  {typeof schedule.currentDelayMinutes === 'number' && schedule.currentDelayMinutes !== null
+                    ? `${schedule.currentDelayMinutes > 0 ? '+' : ''}${schedule.currentDelayMinutes} min`
+                    : '—'}
                 </td>
               </tr>
             ))
