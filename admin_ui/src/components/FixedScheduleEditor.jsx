@@ -47,7 +47,18 @@ const parseTimeToMinutes = (time) => {
   return hours * 60 + minutes
 }
 
-const buildTimeRange = (start, end, intervalMinutes) => {
+const addMinutesToTime = (time, minutesToAdd) => {
+  const normalized = normalizeTime(time)
+  if (!normalized || !Number.isFinite(Number(minutesToAdd))) return null
+  const mins = parseTimeToMinutes(normalized)
+  if (mins === null) return null
+  const total = (mins + Number(minutesToAdd))
+  const hours = Math.floor((total % (24 * 60)) / 60)
+  const minutes = (total % 60 + 60) % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
+const buildTimeRange = (start, end, intervalMinutes, allowWrap = false) => {
   const normalizedStart = normalizeTime(start)
   const normalizedEnd = normalizeTime(end)
   const step = Number(intervalMinutes)
@@ -57,19 +68,34 @@ const buildTimeRange = (start, end, intervalMinutes) => {
   }
 
   const startMinutes = parseTimeToMinutes(normalizedStart)
-  const endMinutes = parseTimeToMinutes(normalizedEnd)
-  if (startMinutes === null || endMinutes === null || endMinutes < startMinutes) {
-    return []
+  let endMinutes = parseTimeToMinutes(normalizedEnd)
+  if (startMinutes === null || endMinutes === null) return []
+
+  if (endMinutes < startMinutes) {
+    if (!allowWrap) return []
+    // wrap end to next day
+    endMinutes += 24 * 60
   }
 
   const times = []
   for (let minute = startMinutes; minute <= endMinutes; minute += step) {
-    const hours = Math.floor(minute / 60)
-    const minutes = minute % 60
+    const m = minute % (24 * 60)
+    const hours = Math.floor(m / 60)
+    const minutes = m % 60
     times.push(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`)
   }
 
   return times
+}
+
+const addDaysToDate = (isoDate, days) => {
+  try {
+    const d = new Date(isoDate + 'T00:00:00')
+    d.setUTCDate(d.getUTCDate() + Number(days))
+    return d.toISOString().split('T')[0]
+  } catch {
+    return isoDate
+  }
 }
 
 const buildCountRange = (start, intervalMinutes, count) => {
@@ -133,6 +159,11 @@ const FixedScheduleEditor = ({
   const [batchCount, setBatchCount] = useState(6)
   const [batchTimes, setBatchTimes] = useState(['08:00'])
   const [newBatchTime, setNewBatchTime] = useState('')
+  const [batchWrap, setBatchWrap] = useState(false)
+  const [appendMode, setAppendMode] = useState(false)
+  const [presetsOpen, setPresetsOpen] = useState(true)
+  const [batchOpen, setBatchOpen] = useState(true)
+  const [templatesOpen, setTemplatesOpen] = useState(true)
   const [presetName, setPresetName] = useState('')
   const [savedPresets, setSavedPresets] = useState([])
   const [deleteConfirm, setDeleteConfirm] = useState(null)
@@ -233,20 +264,31 @@ const FixedScheduleEditor = ({
   }
 
   const generateBatchTimes = () => {
-    const generated = buildTimeRange(batchStartTime, batchEndTime, batchInterval)
-    setBatchTimes(prev => dedupeTimes([...prev, ...generated]))
+    const generated = buildTimeRange(batchStartTime, batchEndTime, batchInterval, batchWrap)
+    if (appendMode) {
+      setBatchTimes(prev => dedupeTimes([...prev, ...generated]))
+    } else {
+      setBatchTimes(dedupeTimes(generated))
+    }
   }
 
   const generateBatchTimesByCount = () => {
     const generated = buildCountRange(batchStartTime, batchInterval, batchCount)
-    setBatchTimes(prev => dedupeTimes([...prev, ...generated]))
+    if (appendMode) {
+      setBatchTimes(prev => dedupeTimes([...prev, ...generated]))
+    } else {
+      setBatchTimes(dedupeTimes(generated))
+    }
   }
 
   const applyPreset = (preset) => {
     setBatchStartTime(preset.start)
     setBatchEndTime(preset.end)
     setBatchInterval(preset.intervalMinutes)
-    setBatchTimes(buildTimeRange(preset.start, preset.end, preset.intervalMinutes))
+    // infer wrap when end < start if preset does not explicitly set wrap
+    const inferredWrap = preset.batchWrap ?? (parseTimeToMinutes(preset.end) < parseTimeToMinutes(preset.start))
+    setBatchWrap(Boolean(inferredWrap))
+    setBatchTimes(buildTimeRange(preset.start, preset.end, preset.intervalMinutes, Boolean(inferredWrap)))
     setScheduleMode('batch')
   }
 
@@ -288,6 +330,8 @@ const FixedScheduleEditor = ({
     setBatchStartTime(preset.batchStartTime || '06:00')
     setBatchEndTime(preset.batchEndTime || '09:00')
     setBatchInterval(Number(preset.batchInterval) || 15)
+    const inferredWrap = preset.batchWrap ?? (parseTimeToMinutes(preset.batchEndTime) < parseTimeToMinutes(preset.batchStartTime))
+    setBatchWrap(Boolean(inferredWrap))
     setBatchCount(Number(preset.batchCount) || 6)
     setBatchTimes(dedupeTimes(Array.isArray(preset.batchTimes) && preset.batchTimes.length > 0 ? preset.batchTimes : [preset.singleTime || '08:00']))
     setMessage(`Preset geladen: ${preset.name}`)
@@ -307,9 +351,14 @@ const FixedScheduleEditor = ({
     setSelectedDate(toInputDate(schedule.startTime))
     setSingleTime(toInputTime(schedule.startTime))
     setSelectedWeekdays(Array.isArray(schedule.weekdays) ? [...schedule.weekdays] : [])
-    setBatchStartTime(toInputTime(schedule.startTime))
-    setBatchEndTime(addMinutesToTime(toInputTime(schedule.startTime), 120) || '09:00')
-    setBatchTimes([toInputTime(schedule.startTime)])
+    const startT = toInputTime(schedule.startTime)
+    const endT = toInputTime(schedule.endTime)
+    setBatchStartTime(startT)
+    setBatchEndTime(addMinutesToTime(startT, 120) || endT || '09:00')
+    // if template end is earlier than start, assume it wraps to next day
+    const inferredWrap = parseTimeToMinutes(endT) < parseTimeToMinutes(startT)
+    setBatchWrap(Boolean(inferredWrap))
+    setBatchTimes([startT])
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -344,15 +393,24 @@ const FixedScheduleEditor = ({
       throw new Error('Voeg minstens één vertrektijd toe voor de reeks')
     }
 
-    const payload = {
-      schedules: uniqueTimes.map(time => ({
+    const startBaseMinutes = parseTimeToMinutes(batchStartTime)
+
+    const schedules = uniqueTimes.map(time => {
+      const tmins = parseTimeToMinutes(time)
+      let dateForTime = selectedDate
+      if (batchWrap && startBaseMinutes !== null && tmins !== null && tmins < startBaseMinutes) {
+        dateForTime = addDaysToDate(selectedDate, 1)
+      }
+      return {
         busLineId: Number(selectedLine),
         busId: Number(selectedBus),
         driverId: driverId ? Number(driverId) : null,
-        startTime: `${selectedDate}T${time}:00`,
+        startTime: `${dateForTime}T${time}:00`,
         weekdays: normalizedWeekdays,
-      })),
-    }
+      }
+    })
+
+    const payload = { schedules }
 
     const res = await client.post('/admin/schedules/bulk', payload)
     return {
@@ -561,57 +619,75 @@ const FixedScheduleEditor = ({
           </div>
 
           {!editingScheduleId && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '12px', background: '#fbfdff' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                <strong>Reusable presets</strong>
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <button type="button" onClick={() => setPresetsOpen(p => !p)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem' }}>
+                  {presetsOpen ? '▾' : '▸'} Reusable presets
+                </button>
                 <span style={{ color: '#666', fontSize: '0.9rem' }}>Sla huidige configuratie op en hergebruik hem later</span>
               </div>
-              <div className="form-row" style={{ marginTop: '0.75rem' }}>
-                <input
-                  type="text"
-                  value={presetName}
-                  onChange={e => setPresetName(e.target.value)}
-                  placeholder="Preset naam, bijvoorbeeld schooldag-ochtend"
-                />
-                <button type="button" className="secondary" onClick={saveCurrentPreset}>
-                  Bewaar preset
-                </button>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
-                {savedPresets.length === 0 ? (
-                  <span style={{ color: '#999', fontSize: '0.9rem' }}>Nog geen presets opgeslagen</span>
-                ) : savedPresets.map(preset => (
-                  <span
-                    key={preset.id}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      padding: '0.45rem 0.7rem',
-                      background: '#eef2ff',
-                      borderRadius: '999px',
-                      border: '1px solid #c7d2fe',
-                    }}
-                  >
-                    <button type="button" className="secondary" onClick={() => loadPreset(preset)}>
-                      {preset.name}
+              {presetsOpen && (
+                <div style={{ marginTop: '0.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '12px', background: '#fbfdff' }}>
+                  <div className="form-row" style={{ marginTop: '0.25rem' }}>
+                    <input
+                      type="text"
+                      value={presetName}
+                      onChange={e => setPresetName(e.target.value)}
+                      placeholder="Preset naam, bijvoorbeeld schooldag-ochtend"
+                    />
+                    <button type="button" className="secondary" onClick={saveCurrentPreset}>
+                      Bewaar preset
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => removePreset(preset.id)}
-                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#6b7280' }}
-                      aria-label={`Verwijder preset ${preset.name}`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
+                    {savedPresets.length === 0 ? (
+                      <span style={{ color: '#999', fontSize: '0.9rem' }}>Nog geen presets opgeslagen</span>
+                    ) : savedPresets.map(preset => (
+                      <span
+                        key={preset.id}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          padding: '0.45rem 0.7rem',
+                          background: '#eef2ff',
+                          borderRadius: '999px',
+                          border: '1px solid #c7d2fe',
+                        }}
+                      >
+                        <button type="button" className="secondary" onClick={() => loadPreset(preset)}>
+                          {preset.name}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removePreset(preset.id)}
+                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#6b7280' }}
+                          aria-label={`Verwijder preset ${preset.name}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {!editingScheduleId && scheduleMode === 'batch' && (
-            <div style={{ marginBottom: '1rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '12px', background: '#fafafa' }}>
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <button type="button" onClick={() => setBatchOpen(b => !b)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem' }}>
+                  {batchOpen ? '▾' : '▸'} Dienstenreeks opties
+                </button>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <label style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', fontSize: '0.9rem' }}>
+                    <input type="checkbox" checked={appendMode} onChange={e => setAppendMode(e.target.checked)} /> Voeg toe
+                  </label>
+                </div>
+              </div>
+              {batchOpen && (
+                <div style={{ marginTop: '0.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '12px', background: '#fafafa' }}>
               <div className="form-row" style={{ alignItems: 'end' }}>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 500 }}>Van</label>
@@ -620,6 +696,11 @@ const FixedScheduleEditor = ({
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 500 }}>Tot</label>
                   <input type="time" value={batchEndTime} onChange={e => setBatchEndTime(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <label style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', fontSize: '0.9rem' }}>
+                    <input type="checkbox" checked={batchWrap} onChange={e => setBatchWrap(e.target.checked)} /> Over middernacht
+                  </label>
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 500 }}>Interval</label>
@@ -697,9 +778,12 @@ const FixedScheduleEditor = ({
                 </div>
               </div>
             </div>
-          )}
+            )}
 
-          <div className="form-row" style={{ alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+            </div>
+            )}
+
+            <div className="form-row" style={{ alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
             <div style={{ color: '#666', fontSize: '0.9rem' }}>
               {editingScheduleId
                 ? 'Je past één bestaande dienst aan.'
@@ -719,71 +803,62 @@ const FixedScheduleEditor = ({
       )}
 
       <h4 style={{ marginTop: '2rem', marginBottom: '0.5rem' }}>Bestaande vaste diensten</h4>
-      <p style={{ margin: 0, color: '#666', fontSize: '0.9rem', marginBottom: '1rem' }}>
-        Bewerk of verwijder hieronder bestaande diensten
-      </p>
-      <div style={{ display: 'grid', gap: '1rem' }}>
-        {scheduleTemplates.length === 0 ? (
-          <div className="message">Nog geen vaste diensten gevonden.</div>
-        ) : (
-          scheduleTemplates
-            .slice()
-            .sort((a, b) => a.lineNumber - b.lineNumber || new Date(a.startTime) - new Date(b.startTime))
-            .map(schedule => (
-              <article key={`template-${schedule.id}`} className="schedule-card" style={{ position: 'relative' }}>
-                <div className="schedule-header">
-                  <strong>Lijn {schedule.lineNumber}</strong>
-                  <span className="schedule-time">
-                    {formatTime(schedule.startTime)} - {formatTime(schedule.endTime)}
-                  </span>
-                </div>
-                <div className="schedule-details">
-                  <div>{schedule.busName}</div>
-                  <div className="schedule-plate">{schedule.licensePlate}</div>
-                  {schedule.driverName && (
-                    <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
-                      {schedule.driverName}
-                    </div>
-                  )}
-                  <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
-                    {schedule.recurrenceLabel || getWeekdayLabel(schedule.weekdays)}
-                  </div>
-                </div>
-
-                {isAdmin && (
-                  <div className="form-row" style={{ marginTop: '0.75rem', gap: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => startEditingSchedule(schedule)}
-                      style={{ flex: 1 }}
-                    >
-                      Bewerken
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => cloneTemplateIntoForm(schedule)}
-                      style={{ flex: 1 }}
-                    >
-                      Klonen
-                    </button>
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => setDeleteConfirm(schedule)}
-                      style={{ flex: 1 }}
-                    >
-                      Verwijderen
-                    </button>
-                  </div>
-                )}
-              </article>
-            ))
-        )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <button type="button" onClick={() => setTemplatesOpen(t => !t)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1rem' }}>
+          {templatesOpen ? '▾' : '▸'} Bestaande vaste diensten
+        </button>
+        <div style={{ color: '#666', fontSize: '0.9rem' }}>Bewerk of verwijder bestaande diensten</div>
       </div>
+      {templatesOpen && (
+        <div style={{ display: 'grid', gap: '1rem' }}>
+          {scheduleTemplates.length === 0 ? (
+            <div className="message">Nog geen vaste diensten gevonden.</div>
+          ) : (
+            scheduleTemplates.slice()
+              .sort((a, b) => a.lineNumber - b.lineNumber || new Date(a.startTime) - new Date(b.startTime))
+              .map(schedule => {
+                return (
+                  <article key={`template-${schedule.id}`} className="schedule-card" style={{ position: 'relative' }}>
+                    <div className="schedule-header">
+                      <strong>Lijn {schedule.lineNumber}</strong>
+                      <span className="schedule-time">
+                        {formatTime(schedule.startTime)} - {formatTime(schedule.endTime)}
+                      </span>
+                    </div>
+                    <div className="schedule-details">
+                      <div>{schedule.busName}</div>
+                      <div className="schedule-plate">{schedule.licensePlate}</div>
+                      {schedule.driverName && (
+                        <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                          {schedule.driverName}
+                        </div>
+                      )}
+                      <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                        {schedule.recurrenceLabel || getWeekdayLabel(schedule.weekdays)}
+                      </div>
+                    </div>
 
-      {message && <div className="message">{message}</div>}
+                    {isAdmin && (
+                      <div className="form-row" style={{ marginTop: '0.75rem', gap: '0.5rem' }}>
+                        <button type="button" className="secondary" onClick={() => startEditingSchedule(schedule)} style={{ flex: 1 }}>
+                          Bewerken
+                        </button>
+                        <button type="button" className="secondary" onClick={() => cloneTemplateIntoForm(schedule)} style={{ flex: 1 }}>
+                          Klonen
+                        </button>
+                        <button type="button" className="danger" onClick={() => setDeleteConfirm(schedule)} style={{ flex: 1 }}>
+                          Verwijderen
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                )
+              })
+          )}
+        </div>
+      )}
+
+        {message && <div className="message">{message}</div>}
 
       {deleteConfirm && (
         <div style={overlay}>
