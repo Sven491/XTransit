@@ -82,28 +82,56 @@ class ScheduleService {
     }
   }
 
-  /// Get daily schedule for a specific date
+  /// Get daily schedule for a specific date (includes recurring schedules)
   Future<DailySchedule> getDailySchedule(DateTime date) async {
     try {
-      final headers = await _authService.getAuthHeaders();
       final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-
-      final response = await http.get(
-        Uri.parse('$_apiBaseUrl/schedule/daily?date=$dateStr'),
-        headers: headers,
+      
+      // Call /schedules/overview which includes both one-time and recurring schedules for the date
+      final uri = Uri.parse('$_apiBaseUrl/schedules/overview').replace(
+        queryParameters: {'date': dateStr}
       );
+      final response = await http.get(uri);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
-        return DailySchedule.fromJson(data);
-      } else if (response.statusCode == 401 || response.statusCode == 403) {
-        await _authService.logout();
-        throw UnauthorizedException('Session expired - Please login again');
+        final schedules = (data['schedules'] as List? ?? [])
+            .map((s) => s as Map<String, dynamic>)
+            .map(ServiceSchedule.fromJson)
+            .toList();
+        
+        // Convert ServiceSchedule to Route objects for display
+        final routes = schedules.map((schedule) {
+          return Route(
+            id: schedule.id,
+            busLine: BusLine(
+              id: schedule.busLineId,
+              lineNumber: schedule.lineNumber,
+              startStop: '',
+              endStop: '',
+              estimatedDuration: 60,
+              description: '',
+            ),
+            busType: BusType(
+              id: schedule.busId,
+              name: schedule.busName,
+              seatCapacity: 0,
+              licensePlate: '',
+            ),
+            startTime: schedule.startTime,
+            endTime: schedule.endTime,
+            status: schedule.status,
+          );
+        }).toList();
+        
+        return DailySchedule(
+          routes: routes,
+          date: date,
+        );
       } else {
         throw Exception('Failed to load schedule: ${response.statusCode}');
       }
     } catch (e) {
-      if (e is UnauthorizedException) rethrow;
       throw Exception('Schedule error: $e');
     }
   }

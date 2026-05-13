@@ -2357,6 +2357,148 @@ app.put('/admin/schedules/:scheduleId', authMiddleware, adminMiddleware, async (
   }
 });
 
+app.post('/admin/schedules/bulk', authMiddleware, adminMiddleware, async (req, res) => {
+  const requestedSchedules = Array.isArray(req.body?.schedules) ? req.body.schedules : [];
+
+  if (requestedSchedules.length === 0) {
+    return res.status(400).json({ error: 'missing_required_fields: schedules array required' });
+  }
+
+  const normalizedSchedules = requestedSchedules.map((schedule, index) => {
+    const busLineId = Number(schedule?.busLineId);
+    const busId = Number(schedule?.busId);
+    const driverId = schedule?.driverId !== null && schedule?.driverId !== undefined && schedule?.driverId !== ''
+      ? Number(schedule.driverId)
+      : null;
+    const startTime = schedule?.startTime ? String(schedule.startTime) : '';
+    const weekdays = Array.isArray(schedule?.weekdays) && schedule.weekdays.length > 0
+      ? schedule.weekdays.map(day => Number(day)).filter(day => day >= 0 && day <= 6)
+      : [];
+
+    if (!Number.isFinite(busLineId) || !Number.isFinite(busId) || !startTime) {
+      throw new Error(`invalid_schedule_entry:${index}`);
+    }
+
+    return { busLineId, busId, driverId, startTime, weekdays };
+  });
+
+  try {
+    if (DEV_MOCK) {
+      if (!_mock.schedules) _mock.schedules = [];
+
+      const createdSchedules = [];
+
+      for (const entry of normalizedSchedules) {
+        const busLine = _mock.busLines.find(bl => bl.id == entry.busLineId);
+        if (!busLine) {
+          return res.status(404).json({ error: 'bus_line_not_found' });
+        }
+
+        const startDate = new Date(entry.startTime);
+        const endDate = new Date(startDate);
+        endDate.setMinutes(endDate.getMinutes() + (busLine.estimatedDurationMinutes || 60));
+
+        const departureTimes = calculateDepartureTimes(entry.startTime, Number(entry.busLineId), _mock);
+
+        const schedule = {
+          id: (_mock.nextScheduleId || 1),
+          busLineId: entry.busLineId,
+          busId: entry.busId,
+          driverId: entry.driverId,
+          startTime: entry.startTime,
+          endTime: endDate.toISOString(),
+          weekdays: entry.weekdays,
+          departureTimes,
+          status: 'planned',
+          createdAt: new Date().toISOString(),
+        };
+
+        _mock.nextScheduleId = ((_mock.nextScheduleId || 1) + 1);
+        _mock.schedules.push(schedule);
+        createdSchedules.push(schedule);
+      }
+
+      return res.status(201).json({ createdCount: createdSchedules.length, schedules: createdSchedules });
+    }
+
+    const dbClient = await db.pool.connect();
+    try {
+      await dbClient.query('BEGIN');
+
+      const hasWeekdaysColumn = await dbClient.query(`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='transit' AND table_name='schedules' AND column_name='weekdays'
+      `);
+
+      const createdSchedules = [];
+
+      for (const entry of normalizedSchedules) {
+        const busLine = await dbClient.query('SELECT estimated_duration_minutes FROM transit.bus_lines WHERE id = $1', [entry.busLineId]);
+        if (!busLine.rows[0]) {
+          throw new Error('bus_line_not_found');
+        }
+
+        const startDate = new Date(entry.startTime);
+        const endDate = new Date(startDate);
+        endDate.setMinutes(endDate.getMinutes() + (busLine.rows[0].estimated_duration_minutes || 60));
+
+        let result;
+        if (hasWeekdaysColumn.rows.length > 0) {
+          result = await dbClient.query(`
+            WITH next_id AS (
+              SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules
+            )
+            INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status, weekdays)
+            SELECT next_id.id, $1, $2, $3, $4, $5, 'planned', $6
+            FROM next_id
+            RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, weekdays, created_at
+          `, [entry.busLineId, entry.busId, entry.driverId, entry.startTime, endDate.toISOString(), JSON.stringify(entry.weekdays)]);
+        } else {
+          result = await dbClient.query(`
+            WITH next_id AS (
+              SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules
+            )
+            INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status)
+            SELECT next_id.id, $1, $2, $3, $4, $5, 'planned'
+            FROM next_id
+            RETURNING id, bus_line_id, bus_id, driver_id, start_time, end_time, status, created_at
+          `, [entry.busLineId, entry.busId, entry.driverId, entry.startTime, endDate.toISOString()]);
+        }
+
+        const schedule = result.rows[0];
+        createdSchedules.push({
+          id: Number(schedule.id),
+          busLineId: Number(schedule.bus_line_id),
+          busId: Number(schedule.bus_id),
+          driverId: schedule.driver_id !== null && schedule.driver_id !== undefined ? Number(schedule.driver_id) : null,
+          startTime: schedule.start_time,
+          endTime: schedule.end_time,
+          weekdays: parseWeekdaysValue(schedule.weekdays),
+          status: schedule.status,
+          createdAt: schedule.created_at,
+        });
+      }
+
+      await dbClient.query('COMMIT');
+      return res.status(201).json({ createdCount: createdSchedules.length, schedules: createdSchedules });
+    } catch (err) {
+      await dbClient.query('ROLLBACK');
+      throw err;
+    } finally {
+      dbClient.release();
+    }
+  } catch (err) {
+    console.error(err);
+    const errorMessage = err.message === 'bus_line_not_found'
+      ? 'bus_line_not_found'
+      : err.message.startsWith('invalid_schedule_entry:')
+        ? err.message
+        : 'internal_error';
+    const statusCode = errorMessage === 'bus_line_not_found' ? 404 : errorMessage.startsWith('invalid_schedule_entry:') ? 400 : 500;
+    res.status(statusCode).json({ error: errorMessage, details: err.message });
+  }
+});
+
 app.delete('/admin/schedules/:scheduleId', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { scheduleId } = req.params;
