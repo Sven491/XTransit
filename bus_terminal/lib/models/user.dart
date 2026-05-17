@@ -19,7 +19,8 @@ class User {
     } else if (rawUserCode is String) {
       parsedUserCode = int.tryParse(rawUserCode) ?? (throw FormatException('Invalid userCode'));
     } else {
-      throw FormatException('Missing userCode');
+      // If the backend doesn't return a userCode, treat as unknown (-1)
+      parsedUserCode = -1;
     }
 
     return User(

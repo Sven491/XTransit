@@ -85,7 +85,7 @@ class NavigationService {
           throw Exception('Failed to get route (400) and fallback failed: ${e.toString()}');
         }
       } else {
-        throw Exception('Failed to get route: ${response.statusCode}');
+        throw Exception('Failed to get route: ${response.statusCode} -- response body: ${response.body}');
       }
     } catch (e) {
       throw Exception('Navigation error: $e');
@@ -110,7 +110,25 @@ class NavigationService {
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode != 200) {
-        throw Exception('Failed to get route: ${response.statusCode}');
+        if (response.statusCode == 400) {
+          final distanceMeters = _sumDistancesBetween(stops);
+          final durationSec = (distanceMeters / 11.111111).toInt();
+          final leg = RouteLeg.fromPoints(
+            points: stops,
+            distance: distanceMeters,
+            duration: durationSec,
+            summary: 'Direct fallback',
+          );
+          return NavigationRoute(
+            start: stops.first,
+            end: stops.last,
+            legs: [leg],
+            totalDistance: distanceMeters,
+            totalDuration: durationSec,
+          );
+        }
+
+        throw Exception('Failed to get route: ${response.statusCode} -- response body: ${response.body}');
       }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>?;
@@ -165,7 +183,7 @@ class NavigationService {
           final route = NavigationRoute(start: stops.first, end: stops.last, legs: [leg], totalDistance: distanceMeters, totalDuration: durationSec);
           return OptimizedRouteResult(route: route, orderedStops: stops);
         }
-        throw Exception('Failed to get optimized route: ${response.statusCode}');
+        throw Exception('Failed to get optimized route: ${response.statusCode} -- response body: ${response.body}');
       }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>?;
@@ -287,7 +305,7 @@ class NavigationService {
         final leg = RouteLeg.fromPoints(points: [start, end], distance: distanceMeters, duration: durationSec, summary: 'Direct');
         return [NavigationRoute(start: start, end: end, legs: [leg], totalDistance: distanceMeters, totalDuration: durationSec)];
       } else {
-        throw Exception('Failed to get routes: ${response.statusCode}');
+        throw Exception('Failed to get routes: ${response.statusCode} -- response body: ${response.body}');
       }
     } catch (e) {
       throw Exception('Navigation error: $e');

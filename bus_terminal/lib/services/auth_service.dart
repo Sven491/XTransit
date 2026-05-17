@@ -5,7 +5,7 @@ import '../models/user.dart';
 
 /// Authentication Service
 class AuthService {
-  static const String _apiBaseUrl = 'http://192.168.2.66:5000';
+  static const String _apiBaseUrl = 'http://api.transit.local:5000';
   static const String _tokenKey = 'auth_token';
 
   late SharedPreferences _prefs;

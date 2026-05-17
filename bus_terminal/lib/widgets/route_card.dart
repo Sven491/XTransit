@@ -67,11 +67,18 @@ class RouteCard extends StatelessWidget {
             // Ignore status update errors here; navigation should still open.
           }
 
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => NavigationScreen(route: route),
-            ),
-          );
+          try {
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => NavigationScreen(route: route),
+              ),
+            );
+          } catch (e) {
+            // Surface navigation errors to the user so they can report/log.
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Navigatiefout: ${e.toString()}')),
+            );
+          }
         },
         borderRadius: BorderRadius.circular(20),
         splashFactory: InkSparkle.splashFactory,

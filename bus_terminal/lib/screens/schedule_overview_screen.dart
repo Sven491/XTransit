@@ -27,7 +27,7 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> with Ti
   void initState() {
     super.initState();
     _scheduleFuture = _scheduleService.getSchedules(_selectedDate);
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -120,12 +120,16 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> with Ti
                     ],
                   ),
                   const SizedBox(height: 20),
-                  SizedBox(
+                          SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: () async {
+                          onPressed: () async {
                         try {
-                          await _scheduleService.updateScheduleStatus(svc.id, 'in_progress');
+                          await _scheduleService.updateScheduleStatus(
+                            svc.id,
+                            'in_progress',
+                            date: svc.startTime,
+                          );
                           if (!mounted) return;
                           Navigator.of(sheetContext).pop();
 
@@ -157,11 +161,18 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> with Ti
                                   ))
                               .toList();
 
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => NavigationScreen(route: routeObj, initialStops: navStops),
-                            ),
-                          );
+                          try {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => NavigationScreen(route: routeObj, initialStops: navStops),
+                              ),
+                            );
+                          } catch (navErr) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Navigatiefout: ${navErr.toString()}')),
+                            );
+                          }
                         } catch (e) {
                           if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -227,6 +238,7 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> with Ti
           tabs: const [
             Tab(icon: Icon(Icons.calendar_today), text: 'Dagschema'),
             Tab(icon: Icon(Icons.repeat), text: 'Vaste diensten'),
+            Tab(icon: Icon(Icons.timeline), text: 'Voortgang'),
           ],
         ),
         actions: [
@@ -249,8 +261,127 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> with Ti
             scheduleFuture: _scheduleFuture,
           ),
           const RecurringSchedulesScreen(),
+          _ProgressTab(
+            scheduleService: _scheduleService,
+            selectedDate: _selectedDate,
+            scheduleFuture: _scheduleFuture,
+          ),
         ],
       ),
+    );
+  }
+}
+
+class _ProgressTab extends StatelessWidget {
+  final ScheduleService scheduleService;
+  final DateTime selectedDate;
+  final Future<List<sched.ServiceSchedule>> scheduleFuture;
+
+  const _ProgressTab({
+    required this.scheduleService,
+    required this.selectedDate,
+    required this.scheduleFuture,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final dateStr = '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Voortgang voor $dateStr', style: Theme.of(context).textTheme.titleLarge),
+              IconButton(
+                onPressed: () async {
+                  // refresh handled by parent via reselecting date; show a simple feedback
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ververs de datum in Dagschema-tab om andere datum te laden')));
+                },
+                icon: const Icon(Icons.info_outline),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: FutureBuilder<List<sched.ServiceSchedule>>(
+            future: scheduleFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+              if (snapshot.hasError) return Center(child: Text('Fout bij laden: ${snapshot.error}'));
+
+              final schedules = snapshot.data ?? [];
+              if (schedules.isEmpty) return Center(child: Text('Geen diensten op $dateStr'));
+
+              return ListView.builder(
+                padding: const EdgeInsets.all(12),
+                itemCount: schedules.length,
+                itemBuilder: (context, index) {
+                  final svc = schedules[index];
+                  return Card(
+                    child: ListTile(
+                      title: Text('Lijn ${svc.lineNumber} — ${svc.busName}'),
+                      subtitle: Text('${_formatTime(svc.startTime)}'),
+                      trailing: TextButton(
+                        onPressed: () async {
+                          try {
+                            final progress = await scheduleService.getScheduleProgress(svc.id, selectedDate);
+                            if (!context.mounted) return;
+                            await showModalBottomSheet<void>(
+                              context: context,
+                              isScrollControlled: true,
+                              builder: (ctx) {
+                                final stops = (progress['stops'] as List<dynamic>?) ?? [];
+                                return Padding(
+                                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Voortgang — Lijn ${svc.lineNumber}', style: Theme.of(ctx).textTheme.headlineSmall),
+                                      const SizedBox(height: 8),
+                                      Text('Status: ${progress['schedule']?['status'] ?? 'onbekend'}'),
+                                      Text('Driver state: ${progress['driverState'] ?? 'onbekend'}'),
+                                      Text('Passed: ${progress['passedStopCount'] ?? 0} / ${progress['totalStopCount'] ?? 0}'),
+                                      const SizedBox(height: 12),
+                                      const Text('Haltes:'),
+                                      const SizedBox(height: 8),
+                                      Expanded(
+                                        child: ListView.builder(
+                                          shrinkWrap: true,
+                                          itemCount: stops.length,
+                                          itemBuilder: (c, i) {
+                                            final s = stops[i] as Map<String, dynamic>;
+                                            return ListTile(
+                                              dense: true,
+                                              title: Text('${s['stopOrder']}. ${s['stopName']}'),
+                                              subtitle: Text('Scheduled: ${s['scheduledPassedAt'] ?? '-'}\nActual: ${s['actualPassedAt'] ?? '-'}'),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            );
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Kon voortgang niet laden: $e')));
+                          }
+                        },
+                        child: const Text('Bekijk voortgang'),
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

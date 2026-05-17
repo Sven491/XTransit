@@ -324,10 +324,10 @@ function parseScheduleFilters(query, options = {}) {
     date: query.date ? String(query.date).trim() : null,
     fromDate: query.fromDate ? String(query.fromDate).trim() : null,
     toDate: query.toDate ? String(query.toDate).trim() : null,
-    driverId: toNumberOrNull(query.driverId ?? query.driver_id),
+    driverId: toNumberOrNull(query.driverId ?? query.driver_id ?? query.chauffeurId ?? query.chauffeur_id),
     busId: toNumberOrNull(query.busId ?? query.bus_id),
     busLineId: toNumberOrNull(query.busLineId ?? query.lineId ?? query.bus_line_id),
-    stopId: toNumberOrNull(query.stopId ?? query.stop_id),
+    stopId: toNumberOrNull(query.stopId ?? query.stop_id ?? query.busStopId ?? query.bus_stop_id),
     statuses,
   };
 }
@@ -429,8 +429,9 @@ function materializeScheduleOverviewRow(row, dateKey, routeStopsByLine = new Map
     id: Number(row.id),
     busLineId,
     busId: Number(row.busId ?? row.bus_id),
-    driverId: row.driverId !== null && row.driverId !== undefined ? Number(row.driverId) : null,
-    driverName: row.driverName ?? row.driver_name ?? null,
+    // Hide driver information in public schedule materialization for privacy
+    driverId: null,
+    driverName: null,
     startTime,
     endTime,
     weekdays,
@@ -1923,6 +1924,91 @@ app.patch('/driver/schedules/:scheduleId/status', authMiddleware, async (req, re
 
     const normalizedStatus = status === 'active' ? 'in_progress' : status;
 
+    // Fetch the target schedule row to detect recurring templates
+    const existing = await db.query(`SELECT * FROM transit.schedules WHERE id = $1`, [scheduleId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule_not_found' });
+    }
+
+    const scheduleRow = existing.rows[0];
+    const weekdays = parseWeekdaysValue(scheduleRow.weekdays);
+
+    // Allow updating a specific occurrence of a recurring template by passing { date: 'YYYY-MM-DD' }
+    const requestedDate = req.body.date || null; // optional date key
+
+    if (weekdays && weekdays.length > 0) {
+      // This is a recurring template. If a date was provided, or the template occurs today, operate on an instance.
+      let targetDateKey = requestedDate;
+      if (!targetDateKey) {
+        const todayKey = new Date().toISOString().slice(0, 10);
+        if (scheduleOccursOnDate(scheduleRow, todayKey)) {
+          targetDateKey = todayKey;
+        }
+      }
+
+      if (targetDateKey) {
+        // Build occurrence start/end based on template times
+        const templateStart = new Date(scheduleRow.start_time ?? scheduleRow.startTime);
+        const templateEnd = new Date(scheduleRow.end_time ?? scheduleRow.endTime);
+        const occurrenceStart = new Date(`${targetDateKey}T00:00:00`);
+        occurrenceStart.setHours(
+          templateStart.getHours(),
+          templateStart.getMinutes(),
+          templateStart.getSeconds(),
+          templateStart.getMilliseconds()
+        );
+
+        let occurrenceEnd = null;
+        if (Number.isFinite(templateEnd.getTime()) && Number.isFinite(templateStart.getTime())) {
+          const duration = templateEnd.getTime() - templateStart.getTime();
+          occurrenceEnd = new Date(occurrenceStart.getTime() + duration);
+        }
+
+        // Check if a concrete instance already exists for this template/date
+        const existingInstance = await db.query(
+          `SELECT * FROM transit.schedules WHERE template_id = $1 AND DATE(start_time) = $2`,
+          [scheduleId, targetDateKey]
+        );
+
+        if (existingInstance.rows.length > 0) {
+          const upd = await db.query(`
+            UPDATE transit.schedules SET status = $1, updated_at = NOW()
+            WHERE id = $2
+            RETURNING *
+          `, [normalizedStatus, existingInstance.rows[0].id]);
+          return res.json({ schedule: upd.rows[0] });
+        }
+
+        // Insert a new instance derived from template
+        const hasTemplateIdCol = await db.query(`
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='transit' AND table_name='schedules' AND column_name='template_id'
+        `);
+
+        let insertResult;
+        if (hasTemplateIdCol.rows.length > 0) {
+          insertResult = await db.query(`
+            WITH next_id AS (SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules)
+            INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status, template_id)
+            SELECT next_id.id, $1, $2, $3, $4, $5, $6, $7
+            FROM next_id
+            RETURNING *
+          `, [scheduleRow.bus_line_id, scheduleRow.bus_id, scheduleRow.driver_id, occurrenceStart.toISOString(), occurrenceEnd ? occurrenceEnd.toISOString() : null, normalizedStatus, scheduleId]);
+        } else {
+          insertResult = await db.query(`
+            WITH next_id AS (SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules)
+            INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status)
+            SELECT next_id.id, $1, $2, $3, $4, $5, $6
+            FROM next_id
+            RETURNING *
+          `, [scheduleRow.bus_line_id, scheduleRow.bus_id, scheduleRow.driver_id, occurrenceStart.toISOString(), occurrenceEnd ? occurrenceEnd.toISOString() : null, normalizedStatus]);
+        }
+
+        return res.json({ schedule: insertResult.rows[0] });
+      }
+    }
+
+    // Fallback: update the schedule row directly (one-time or when no occurrence date is inferred)
     const result = await db.query(`
       UPDATE transit.schedules
       SET status = $1, updated_at = NOW()
@@ -2566,7 +2652,7 @@ app.get('/schedules', async (req, res) => {
           status: s.status,
           lineNumber: busLine?.lineNumber || 0,
           busName: bus?.name || 'Unknown Bus',
-          driverId: s.driverId || null,
+          driverId: null,
           estimatedDurationMinutes: busLine?.estimatedDurationMinutes || 60,
         };
       })).filter(row => scheduleMatchesFilters(row, filters, routeStopsByLine));
@@ -2648,7 +2734,8 @@ app.get('/schedules', async (req, res) => {
         id: Number(row.id),
         busLineId: Number(row.bus_line_id),
         busId: Number(row.bus_id),
-        driverId: row.driver_id !== null && row.driver_id !== undefined ? Number(row.driver_id) : null,
+        // Hide driver from public API responses
+        driverId: null,
         startTime: row.start_time,
         endTime: row.end_time,
         weekdays: row.weekdays ? (typeof row.weekdays === 'string' ? JSON.parse(row.weekdays) : row.weekdays) : [],
@@ -3279,7 +3366,68 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
 
     const routeStop = routeStopResult.rows[0];
     // Determine occurrence date (for recurring templates callers can pass ?date=YYYY-MM-DD or body.date)
-    const occurrenceDateKey = req.query.date || req.body.date || toDateKey(schedule.start_time);
+    let occurrenceDateKey = req.query.date || req.body.date || toDateKey(schedule.start_time);
+
+    // If this schedule is a recurring template, map to or create a concrete instance for the occurrence date
+    const weekdays = parseWeekdaysValue(schedule.weekdays);
+    let instanceScheduleId = scheduleId;
+    if (weekdays && weekdays.length > 0) {
+      // If no date provided but template occurs today, use today
+      if (!occurrenceDateKey) {
+        const todayKey = new Date().toISOString().slice(0, 10);
+        if (scheduleOccursOnDate(schedule, todayKey)) occurrenceDateKey = todayKey;
+      }
+
+      if (occurrenceDateKey) {
+        const existingInstance = await db.query(
+          `SELECT id FROM transit.schedules WHERE template_id = $1 AND DATE(start_time) = $2 LIMIT 1`,
+          [scheduleId, occurrenceDateKey]
+        );
+
+        if (existingInstance.rows.length > 0) {
+          instanceScheduleId = existingInstance.rows[0].id;
+        } else {
+          // Create instance from template
+          const templateStart = new Date(schedule.start_time);
+          const templateEnd = schedule.end_time ? new Date(schedule.end_time) : null;
+          const occurrenceStart = new Date(`${occurrenceDateKey}T00:00:00`);
+          occurrenceStart.setHours(templateStart.getHours(), templateStart.getMinutes(), templateStart.getSeconds(), templateStart.getMilliseconds());
+
+          let occurrenceEnd = null;
+          if (templateEnd && Number.isFinite(templateEnd.getTime()) && Number.isFinite(templateStart.getTime())) {
+            const duration = templateEnd.getTime() - templateStart.getTime();
+            occurrenceEnd = new Date(occurrenceStart.getTime() + duration);
+          }
+
+          const hasTemplateIdCol = await db.query(`
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='transit' AND table_name='schedules' AND column_name='template_id'
+          `);
+
+          let insertRes;
+          if (hasTemplateIdCol.rows.length > 0) {
+            insertRes = await db.query(`
+              WITH next_id AS (SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules)
+              INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status, template_id)
+              SELECT next_id.id, $1, $2, $3, $4, $5, 'planned', $6
+              FROM next_id
+              RETURNING id
+            `, [schedule.bus_line_id, schedule.bus_id, schedule.driver_id, occurrenceStart.toISOString(), occurrenceEnd ? occurrenceEnd.toISOString() : null, scheduleId]);
+          } else {
+            insertRes = await db.query(`
+              WITH next_id AS (SELECT COALESCE(MAX(id), 0) + 1 AS id FROM transit.schedules)
+              INSERT INTO transit.schedules (id, bus_line_id, bus_id, driver_id, start_time, end_time, status)
+              SELECT next_id.id, $1, $2, $3, $4, $5, 'planned'
+              FROM next_id
+              RETURNING id
+            `, [schedule.bus_line_id, schedule.bus_id, schedule.driver_id, occurrenceStart.toISOString(), occurrenceEnd ? occurrenceEnd.toISOString() : null]);
+          }
+
+          instanceScheduleId = insertRes.rows[0].id;
+        }
+      }
+    }
+
     const templateStart = new Date(schedule.start_time);
     const scheduledPassedAt = new Date(`${occurrenceDateKey}T00:00:00`);
     scheduledPassedAt.setHours(templateStart.getHours(), templateStart.getMinutes(), templateStart.getSeconds(), templateStart.getMilliseconds());
@@ -3305,7 +3453,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
         marked_by_user_id = EXCLUDED.marked_by_user_id,
         created_at = NOW()
     `, [
-      scheduleId,
+      instanceScheduleId,
       Number(schedule.bus_line_id),
       Number(routeStop.stop_id),
       stopOrder,
@@ -3321,7 +3469,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
       SELECT
         (SELECT COUNT(*)::int FROM transit.route_stops WHERE bus_line_id = $1) AS total_stops,
         (SELECT COUNT(*)::int FROM transit.schedule_stop_progress WHERE schedule_id = $2 AND scheduled_passed_date = $3) AS passed_stops
-    `, [schedule.bus_line_id, scheduleId, occurrenceDateKey]);
+    `, [schedule.bus_line_id, instanceScheduleId, occurrenceDateKey]);
 
     const totalStops = Number(totalsResult.rows[0]?.total_stops || 0);
     const passedStops = Number(totalsResult.rows[0]?.passed_stops || 0);
@@ -3334,7 +3482,7 @@ app.post('/driver/schedules/:scheduleId/stops/:stopOrder/passed', authMiddleware
         status = $2,
         end_time = CASE WHEN $2 = 'completed' THEN $3 ELSE end_time END
       WHERE id = $1
-    `, [scheduleId, nextStatus, actualPassedAt.toISOString()]);
+    `, [instanceScheduleId, nextStatus, actualPassedAt.toISOString()]);
 
     // Calculate delay live
     const delayMinutes = Math.round((actualPassedAt.getTime() - scheduledPassedAt.getTime()) / 60000);

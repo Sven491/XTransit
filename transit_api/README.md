@@ -96,9 +96,15 @@ Alle endpoints vereisen een `Authorization: Bearer {token}` header.
 - Haalt een datum-gebonden overzicht op van geplande diensten
 - Herhaalde diensten worden naar de geselecteerde datum gematerialiseerd via `weekdays`
 - Incidentele diensten worden alleen meegenomen op hun exacte datum
+- Filters: `driverId`/`chauffeurId`, `stopId`/`busStopId`, `lineId`, `status`
 - Response: `{ "date": "2026-05-06", "summary": {...}, "schedules": [...] }`
 
 De legacy endpoint **GET** `/schedules` blijft beschikbaar voor bestaande clients.
+
+Voorbeeld:
+```bash
+curl "http://localhost:5001/schedules/overview?date=2026-05-06&chauffeurId=12&busStopId=3"
+```
 
 ### Navigation
 

@@ -7,9 +7,7 @@ import 'exceptions.dart';
 
 /// Schedule/Route Service
 class ScheduleService {
-  // TODO: Implement API connector - configure base URL from env/config
-  // Transit API runs on port 5001
-  static const String _apiBaseUrl = 'http://192.168.2.66:5001';
+  static const String _apiBaseUrl = 'https://transit.xtransit.testinstance.nl';
   final _authService = AuthService();
 
   /// Get public schedule overview for a specific date.
@@ -141,12 +139,28 @@ class ScheduleService {
     return getDailySchedule(DateTime.now());
   }
 
+  /// Get per-date progress for a schedule occurrence (public endpoint)
+  Future<Map<String, dynamic>> getScheduleProgress(int scheduleId, DateTime date) async {
+    try {
+      final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      final uri = Uri.parse('$_apiBaseUrl/public/schedules/$scheduleId/progress').replace(queryParameters: {'date': dateStr});
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+
+      throw Exception('Failed to load progress: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('Schedule progress error: $e');
+    }
+  }
+
   /// Get route details
   Future<Route> getRouteDetails(int routeId) async {
     try {
       final headers = await _authService.getAuthHeaders();
 
-      // Transit API exposes route details at /routes/:routeId
       final response = await http.get(
         Uri.parse('$_apiBaseUrl/routes/$routeId'),
         headers: headers,
@@ -156,10 +170,10 @@ class ScheduleService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return Route.fromJson(data);
       } else if (response.statusCode == 401 || response.statusCode == 403) {
-        await _authService.logout();
         throw UnauthorizedException('Session expired - Please login again');
       } else {
-        throw Exception('Failed to load route: ${response.statusCode}');
+        final body = response.body;
+        throw Exception('Failed to load route: ${response.statusCode} -- response body: $body');
       }
     } catch (e) {
       if (e is UnauthorizedException) rethrow;
@@ -180,7 +194,6 @@ class ScheduleService {
       );
 
       if (response.statusCode == 401 || response.statusCode == 403) {
-        await _authService.logout();
         throw UnauthorizedException('Session expired - Please login again');
       } else if (response.statusCode != 200) {
         throw Exception('Failed to update status: ${response.statusCode}');
@@ -192,18 +205,23 @@ class ScheduleService {
   }
 
   /// Update schedule status for driver-facing schedule workflows.
-  Future<void> updateScheduleStatus(int scheduleId, String status) async {
+  Future<void> updateScheduleStatus(int scheduleId, String status, {DateTime? date}) async {
     try {
       final headers = await _authService.getAuthHeaders();
+
+      final body = <String, dynamic>{'status': status};
+      if (date != null) {
+        final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+        body['date'] = dateStr;
+      }
 
       final response = await http.patch(
         Uri.parse('$_apiBaseUrl/driver/schedules/$scheduleId/status'),
         headers: headers,
-        body: jsonEncode({'status': status}),
+        body: jsonEncode(body),
       );
 
       if (response.statusCode == 401 || response.statusCode == 403) {
-        await _authService.logout();
         throw UnauthorizedException('Session expired - Please login again');
       } else if (response.statusCode != 200) {
         throw Exception('Failed to update schedule status: ${response.statusCode}');
@@ -226,27 +244,25 @@ class ScheduleService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final stops = (data['stops'] as List?)
-                ?.map((s) => s as Map<String, dynamic>)
-                .map((s) {
-                  final lat = (s['latitude'] ?? s['lat']) as num?;
-                  final lon = (s['longitude'] ?? s['lon']) as num?;
-                  final name = (s['name'] ?? s['stop_name'] ?? s['stopName']) as String?;
-                  if (lat == null || lon == null) return null;
-                  return NavigationPoint(
-                    latitude: lat.toDouble(),
-                    longitude: lon.toDouble(),
-                    name: name,
-                  );
-                })
-                .whereType<NavigationPoint>()
-                .toList() ?? [];
+        final raw = data['stops'] as List? ?? [];
+        final stops = raw.map((s) => s as Map<String, dynamic>).map((s) {
+          final lat = (s['latitude'] ?? s['lat']) as num?;
+          final lon = (s['longitude'] ?? s['lon']) as num?;
+          final name = (s['name'] ?? s['stop_name'] ?? s['stopName']) as String?;
+          if (lat == null || lon == null) return null;
+          return NavigationPoint(
+            latitude: lat.toDouble(),
+            longitude: lon.toDouble(),
+            name: name,
+          );
+        }).whereType<NavigationPoint>().toList();
+
         return stops;
       } else if (response.statusCode == 401 || response.statusCode == 403) {
-        await _authService.logout();
         throw UnauthorizedException('Session expired - Please login again');
       } else {
-        throw Exception('Failed to load stops: ${response.statusCode}');
+        final body = response.body;
+        throw Exception('Failed to load stops: ${response.statusCode} -- response body: $body');
       }
     } catch (e) {
       if (e is UnauthorizedException) rethrow;
@@ -263,12 +279,13 @@ class ScheduleService {
     try {
       final headers = await _authService.getAuthHeaders();
 
+      final body = <String, dynamic>{};
+      if (actualPassedAt != null) body['actualPassedAt'] = actualPassedAt.toIso8601String();
+
       final response = await http.post(
         Uri.parse('$_apiBaseUrl/driver/schedules/$scheduleId/stops/$stopOrder/passed'),
         headers: headers,
-        body: jsonEncode({
-          if (actualPassedAt != null) 'actualPassedAt': actualPassedAt.toIso8601String(),
-        }),
+        body: jsonEncode(body),
       );
 
       if (response.statusCode == 401 || response.statusCode == 403) {

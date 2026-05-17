@@ -3,6 +3,7 @@ import 'screens/login_screen.dart';
 import 'screens/schedule_overview_screen.dart';
 import 'services/auth_service.dart';
 import 'theme/app_theme.dart';
+import 'services/app_navigator.dart';
 
 void main() {
   runApp(const MainApp());
@@ -15,6 +16,8 @@ class MainApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Bus Terminal',
+      navigatorKey: navigatorKey,
+      scaffoldMessengerKey: messengerKey,
       theme: AppTheme.lightTheme(),
       darkTheme: AppTheme.darkTheme(),
       themeMode: ThemeMode.system,
