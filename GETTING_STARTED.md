@@ -24,7 +24,7 @@ POSTGRES_PASSWORD_AUTH=your_password
 POSTGRES_USER_TRANSIT=transitAPI
 POSTGRES_PASSWORD_TRANSIT=your_password
 JWT_SECRET=your-secure-secret
-ADMIN_USER_CODES=42
+# ADMIN_USER_CODES should be set in auth_api/.env (comma-separated admin user codes)
 ```
 
 ### Step 3: Start Services

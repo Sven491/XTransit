@@ -134,7 +134,7 @@ All requests include JWT Bearer token for authentication.
 
 ### Admin Authorization
 
-Users must have a `userCode` in their JWT that matches `ADMIN_USER_CODES` environment variable in the transit API to access admin endpoints.
+Users must have a `userCode` in their JWT and, for admin access, the `isAdmin` flag set by the `auth_api` based on the `ADMIN_USER_CODES` environment variable.
 
 ### Production Setup
 

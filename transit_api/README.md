@@ -42,9 +42,10 @@ PG_USER=your_user
 PG_PASS=your_password
 PG_DB=your_database
 JWT_SECRET=your_jwt_secret
-ADMIN_USER_CODES=12345,67890
 PORT=5001
 ```
+
+Note: `ADMIN_USER_CODES` has been moved to the `auth_api` service. Configure admin user codes in `auth_api/.env` as a comma-separated list.
 
 ### 4. API starten
 

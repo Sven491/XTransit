@@ -370,10 +370,11 @@ Admin dashboard uses simple JWT-based authentication:
 2. Receive JWT token from `auth_api`
 3. Use token for admin operations (`/admin/*` endpoints)
 
-Admin authorization is controlled by `ADMIN_USER_CODES` environment variable:
+Admin authorization is controlled by `ADMIN_USER_CODES` environment variable configured in the `auth_api` service:
 
 ```bash
-ADMIN_USER_CODES=42,101,205  # Comma-separated admin user codes
+# Set admin user codes for the auth service (comma-separated)
+ADMIN_USER_CODES=42,101,205
 ```
 
 ---
@@ -385,7 +386,8 @@ ADMIN_USER_CODES=42,101,205  # Comma-separated admin user codes
 Use `DEV_MOCK=1` to work without a database (in-memory mock storage):
 
 ```bash
-ADMIN_USER_CODES=42 DEV_MOCK=1 JWT_SECRET=devsecret npm --prefix ./transit_api start
+# For local development set admin codes on the auth_api and start services
+ADMIN_USER_CODES=42 DEV_MOCK=1 JWT_SECRET=devsecret npm --prefix ./auth_api start
 ```
 
 ### Production Mode
