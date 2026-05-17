@@ -1,4 +1,4 @@
-/// Custom exception for authentication errors
+// Custom exception for authentication errors
 import 'app_navigator.dart';
 
 class UnauthorizedException implements Exception {

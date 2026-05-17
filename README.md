@@ -5,6 +5,7 @@ Dit repository bevat een suite van drie Node.js microservices (APIs) en bijbehor
 - `auth_api` — Authenticatie en token-uitgifte (standaard port 5000)
 - `employee_api` — Employee onboarding / management (standaard port 4000)
 - `transit_api` — Transit/schedule endpoints (standaard port 5001)
+- `error_log_api` — Centrale foutlogging en viewer (standaard port 5003)
 
 Er is ook een GitHub Actions workflow aanwezig die Docker images bouwt en pusht naar GitHub Container Registry (GHCR).
 
@@ -77,9 +78,14 @@ POSTGRES_USER_EMPLOYEE=employee_user
 POSTGRES_PASSWORD_EMPLOYEE=strong_password_employee
 POSTGRES_USER_TRANSIT=transit_user
 POSTGRES_PASSWORD_TRANSIT=strong_password_transit
+POSTGRES_USER_ERROR_LOG=error_logger
+POSTGRES_PASSWORD_ERROR_LOG=strong_password_error_log
 
 # JWT secret voor services die JWT gebruiken
 JWT_SECRET=super_secret_jwt_key_here
+
+# Optioneel: centraal error log endpoint voor clients/services
+ERROR_LOG_API_URL=http://error_log_api:5003/error_log
 ```
 
 Opmerking: de exacte variabelen worden gelezen door `docker-compose.yml`. Pas de namen/waarden aan naar jouw omgeving.
@@ -217,6 +223,30 @@ docker login ghcr.io
 Database schema en migraties zitten niet in deze repository. Zorg dat je:
 - de juiste schema's (`workers`, `routes`, etc.) aanmaakt
 - gebruikers en rechten configureert voor de verschillende services
+
+### Error logging schema
+
+Voor de centrale foutlogging maak je schema `data` en tabel `data.errors` aan:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS data;
+
+CREATE TABLE IF NOT EXISTS data.errors (
+	id BIGSERIAL PRIMARY KEY,
+	"date" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	"service" TEXT NOT NULL,
+	"partOfService" TEXT,
+	"error" TEXT NOT NULL
+);
+```
+
+Gebruik een aparte gebruiker met minimale rechten, bijvoorbeeld `error_logger`:
+
+```sql
+CREATE ROLE error_logger LOGIN PASSWORD 'strong_password_error_log';
+GRANT USAGE ON SCHEMA data TO error_logger;
+GRANT INSERT, SELECT ON data.errors TO error_logger;
+```
 
 Als je nog geen database hebt, kun je lokaal een Postgres container gebruiken (development):
 

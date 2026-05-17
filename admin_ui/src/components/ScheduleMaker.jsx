@@ -11,7 +11,7 @@ export default function ScheduleMaker({ token, user }) {
   const [drivers, setDrivers] = useState([])
   const [selectedDriverFilter, setSelectedDriverFilter] = useState('')
   const [message, setMessage] = useState(null)
-  const [isAdmin] = useState(Boolean(user?.userCode))
+  const [isAdmin] = useState(Boolean(user?.isAdmin))
   const [overviewDate, setOverviewDate] = useState(new Date().toISOString().split('T')[0])
 
   const loadScheduleTemplates = async () => {

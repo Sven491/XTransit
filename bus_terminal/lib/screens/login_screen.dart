@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/error_log_service.dart';
 import '../widgets/custom_input_field.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -37,7 +38,17 @@ class _LoginScreenState extends State<LoginScreen> {
       final input = _userCodeController.text.trim();
       final parsedUserCode = int.tryParse(input);
       if (parsedUserCode == null) {
-        throw Exception('User code must be a number');
+        await ErrorLogService.report(
+          service: 'bus_terminal',
+          partOfService: 'LoginScreen._handleLogin',
+          error: 'User code must be a number',
+        );
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'User code must be a number';
+          });
+        }
+        return;
       }
 
       await _authService.login(
@@ -50,6 +61,11 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.of(context).pushReplacementNamed('/schedule');
       }
     } catch (e) {
+      await ErrorLogService.report(
+        service: 'bus_terminal',
+        partOfService: 'LoginScreen._handleLogin.catch',
+        error: e.toString(),
+      );
       if (mounted) {
         setState(() {
           _errorMessage = e.toString().replaceAll('Exception: ', '');

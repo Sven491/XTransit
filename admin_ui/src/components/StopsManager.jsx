@@ -8,7 +8,7 @@ export default function StopsManager({ token, user }) {
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
   const [message, setMessage] = useState(null)
-  const [isAdmin] = useState(Boolean(user?.userCode))
+  const [isAdmin] = useState(Boolean(user?.isAdmin))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [editingStop, setEditingStop] = useState(null)
 

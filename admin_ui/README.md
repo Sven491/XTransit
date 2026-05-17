@@ -10,6 +10,7 @@ Modern React + Vite web application for comprehensive transit system administrat
 ✅ **Stop Linking** - Assign stops to bus lines with order and ETA
 ✅ **JWT Authentication** - Secure authentication with role-based access
 ✅ **Production Ready** - Docker containerized with runtime env configuration
+✅ **Error Log Viewer** - Inspect centralized error logs from all services
 
 ## Local Development
 
@@ -31,6 +32,7 @@ Create a `.env` file in the `admin_ui` directory:
 ```env
 VITE_AUTH_API=http://localhost:5000
 VITE_TRANSIT_API=http://localhost:5001
+VITE_ERROR_LOG_API=http://localhost:5003
 ```
 
 ### Run Development Server
@@ -109,12 +111,14 @@ When running in Docker, environment variables are injected at runtime via `docke
 - `BusLinesManager.jsx` - Create/list bus routes
 - `FleetManager.jsx` - View fleet vehicles
 - `LinkStop.jsx` - Link stops to bus lines
+- `ErrorLogViewer.jsx` - Central error log viewer
 
 ### API Integration
 
 The app communicates with:
 - **Auth API** (/login, /me)
 - **Transit API** (/admin/stops, /admin/bus-lines, /admin/fleet/buses)
+- **Error Log API** (/error_log)
 
 All requests include JWT Bearer token for authentication.
 
@@ -139,6 +143,7 @@ Users must have a `userCode` in their JWT that matches `ADMIN_USER_CODES` enviro
 3. Configure proper JWT generation in auth_api
 4. Set strong `JWT_SECRET` environment variable
 5. Configure `ADMIN_USER_CODES` with actual admin user IDs
+6. Configure `VITE_ERROR_LOG_API` if you use a custom logging endpoint
 
 ## Troubleshooting
 

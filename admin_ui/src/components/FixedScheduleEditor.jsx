@@ -172,7 +172,7 @@ const FixedScheduleEditor = ({
   const [availableDrivers, setAvailableDrivers] = useState([])
   const [pendingBatchData, setPendingBatchData] = useState(null)
 
-  const isAdmin = Boolean(user?.userCode)
+  const isAdmin = Boolean(user?.isAdmin)
 
   const resetForm = () => {
     setEditingScheduleId(null)

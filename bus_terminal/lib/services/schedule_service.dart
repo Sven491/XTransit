@@ -3,12 +3,21 @@ import 'package:http/http.dart' as http;
 import '../models/schedule.dart';
 import '../models/navigation.dart';
 import 'auth_service.dart';
+import 'error_log_service.dart';
 import 'exceptions.dart';
 
 /// Schedule/Route Service
 class ScheduleService {
   static const String _apiBaseUrl = 'https://transit.xtransit.testinstance.nl';
   final _authService = AuthService();
+
+  Future<void> _reportError(String partOfService, Object error) {
+    return ErrorLogService.report(
+      service: 'bus_terminal',
+      partOfService: partOfService,
+      error: error.toString(),
+    );
+  }
 
   /// Get public schedule overview for a specific date.
   Future<List<ServiceSchedule>> getSchedules(DateTime date, {int? lineId}) async {
@@ -32,6 +41,7 @@ class ScheduleService {
 
       throw Exception('Failed to load schedules: ${response.statusCode}');
     } catch (e) {
+      await _reportError('ScheduleService.getSchedules', e);
       throw Exception('Schedule error: $e');
     }
   }
@@ -57,6 +67,7 @@ class ScheduleService {
 
       throw Exception('Failed to load recurring schedules: ${response.statusCode}');
     } catch (e) {
+      await _reportError('ScheduleService.getRecurringSchedules', e);
       throw Exception('Recurring schedule error: $e');
     }
   }
@@ -76,6 +87,7 @@ class ScheduleService {
 
       throw Exception('Failed to load schedule stops: ${response.statusCode}');
     } catch (e) {
+      await _reportError('ScheduleService.getScheduleStops', e);
       throw Exception('Schedule stops error: $e');
     }
   }
@@ -130,6 +142,7 @@ class ScheduleService {
         throw Exception('Failed to load schedule: ${response.statusCode}');
       }
     } catch (e) {
+      await _reportError('ScheduleService.getDailySchedule', e);
       throw Exception('Schedule error: $e');
     }
   }
@@ -152,6 +165,7 @@ class ScheduleService {
 
       throw Exception('Failed to load progress: ${response.statusCode}');
     } catch (e) {
+      await _reportError('ScheduleService.getScheduleProgress', e);
       throw Exception('Schedule progress error: $e');
     }
   }
@@ -177,6 +191,7 @@ class ScheduleService {
       }
     } catch (e) {
       if (e is UnauthorizedException) rethrow;
+      await _reportError('ScheduleService.getRouteDetails', e);
       throw Exception('Route error: $e');
     }
   }
@@ -200,6 +215,7 @@ class ScheduleService {
       }
     } catch (e) {
       if (e is UnauthorizedException) rethrow;
+      await _reportError('ScheduleService.updateRouteStatus', e);
       throw Exception('Status update error: $e');
     }
   }
@@ -228,6 +244,7 @@ class ScheduleService {
       }
     } catch (e) {
       if (e is UnauthorizedException) rethrow;
+      await _reportError('ScheduleService.updateScheduleStatus', e);
       throw Exception('Schedule status update error: $e');
     }
   }
@@ -266,6 +283,7 @@ class ScheduleService {
       }
     } catch (e) {
       if (e is UnauthorizedException) rethrow;
+      await _reportError('ScheduleService.getStops', e);
       throw Exception('Get stops error: $e');
     }
   }
@@ -298,6 +316,7 @@ class ScheduleService {
       }
     } catch (e) {
       if (e is UnauthorizedException) rethrow;
+      await _reportError('ScheduleService.markScheduleStopPassed', e);
       throw Exception('Mark stop passed error: $e');
     }
   }

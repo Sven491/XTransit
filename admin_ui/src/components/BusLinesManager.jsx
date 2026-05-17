@@ -11,7 +11,7 @@ export default function BusLinesManager({ token, user }) {
   const [estimatedDurationMinutes, setEstimatedDurationMinutes] = useState('')
   const [description, setDescription] = useState('')
   const [message, setMessage] = useState(null)
-  const [isAdmin] = useState(Boolean(user?.userCode))
+  const [isAdmin] = useState(Boolean(user?.isAdmin))
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [editingLine, setEditingLine] = useState(null)
 

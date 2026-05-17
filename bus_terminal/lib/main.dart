@@ -1,12 +1,48 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'screens/schedule_overview_screen.dart';
 import 'services/auth_service.dart';
 import 'theme/app_theme.dart';
 import 'services/app_navigator.dart';
+import 'services/error_log_service.dart';
 
 void main() {
-  runApp(const MainApp());
+  WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    void report() => ErrorLogService.report(
+      service: 'bus_terminal',
+      partOfService: 'FlutterError.onError',
+      error: details.exceptionAsString(),
+    );
+    // ignore: unawaited_futures
+    report();
+  };
+
+  PlatformDispatcher.instance.onError = (error, stack) {
+    // ignore: unawaited_futures
+    ErrorLogService.report(
+      service: 'bus_terminal',
+      partOfService: 'PlatformDispatcher.onError',
+      error: '$error\n$stack',
+    );
+    return true;
+  };
+
+  runZonedGuarded(() {
+    runApp(const MainApp());
+  }, (error, stack) {
+    // ignore: unawaited_futures
+    ErrorLogService.report(
+      service: 'bus_terminal',
+      partOfService: 'runZonedGuarded',
+      error: '$error\n$stack',
+    );
+  });
 }
 
 class MainApp extends StatelessWidget {

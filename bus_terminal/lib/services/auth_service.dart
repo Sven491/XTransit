@@ -2,13 +2,22 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import 'error_log_service.dart';
 
 /// Authentication Service
 class AuthService {
-  static const String _apiBaseUrl = 'http://api.transit.local:5000';
+  static const String _apiBaseUrl = 'https://transit.xtransit.testinstance.nl';
   static const String _tokenKey = 'auth_token';
 
   late SharedPreferences _prefs;
+
+  Future<void> _reportError(String partOfService, Object error) {
+    return ErrorLogService.report(
+      service: 'bus_terminal',
+      partOfService: partOfService,
+      error: error.toString(),
+    );
+  }
 
   Future<void> _initPrefs() async {
     _prefs = await SharedPreferences.getInstance();
@@ -42,6 +51,7 @@ class AuthService {
 
           return authResponse;
         } catch (e) {
+          await _reportError('AuthService.login.parse', e);
           // Surface the response body to help debug backend field names / formats
           throw Exception('Login parse error: $e -- response body: $body');
         }
@@ -51,6 +61,7 @@ class AuthService {
         throw Exception('Login failed: ${response.statusCode}');
       }
     } catch (e) {
+      await _reportError('AuthService.login', e);
       throw Exception('Login error: $e');
     }
   }

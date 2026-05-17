@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'error_log_service.dart';
 import '../models/navigation.dart';
 
 /// Navigation Service using OpenStreetMap
@@ -10,6 +11,13 @@ class NavigationService {
   static const String _osrmBaseUrl = 'https://router.project-osrm.org/route/v1/driving';
 
   /// Get current device location
+  Future<void> _reportError(String partOfService, Object error) {
+    return ErrorLogService.report(
+      service: 'bus_terminal',
+      partOfService: partOfService,
+      error: error.toString(),
+    );
+  }
   Future<NavigationPoint?> getCurrentLocation() async {
     try {
       final permission = await Geolocator.checkPermission();
@@ -27,6 +35,7 @@ class NavigationService {
         name: 'Current Location',
       );
     } catch (e) {
+      await _reportError('NavigationService.getCurrentLocation', e);
       throw Exception('Failed to get location: $e');
     }
   }
@@ -88,6 +97,7 @@ class NavigationService {
         throw Exception('Failed to get route: ${response.statusCode} -- response body: ${response.body}');
       }
     } catch (e) {
+      await _reportError('NavigationService.getRoute', e);
       throw Exception('Navigation error: $e');
     }
   }
@@ -152,6 +162,7 @@ class NavigationService {
         end: stops.last,
       );
     } catch (e) {
+      await _reportError('NavigationService.getRouteThroughStops', e);
       throw Exception('Navigation error: $e');
     }
   }
@@ -252,6 +263,7 @@ class NavigationService {
         orderedStops: orderedStops.isNotEmpty ? orderedStops : stops,
       );
     } catch (e) {
+      await _reportError('NavigationService.getOptimizedRouteThroughStops', e);
       throw Exception('Navigation error: $e');
     }
   }
@@ -308,6 +320,7 @@ class NavigationService {
         throw Exception('Failed to get routes: ${response.statusCode} -- response body: ${response.body}');
       }
     } catch (e) {
+      await _reportError('NavigationService.getMultipleRoutes', e);
       throw Exception('Navigation error: $e');
     }
   }
@@ -358,6 +371,7 @@ class NavigationService {
 
       return NavigationPoint(latitude: lat, longitude: lon, name: display);
     } catch (e) {
+      await _reportError('NavigationService.geocodePlace', e);
       throw Exception('Geocode error: $e');
     }
   }

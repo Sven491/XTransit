@@ -5,6 +5,7 @@ import LinkStop from './components/LinkStop'
 import BusLinesManager from './components/BusLinesManager'
 import FleetManager from './components/FleetManager'
 import ScheduleMaker from './components/ScheduleMaker'
+import ErrorLogViewer from './components/ErrorLogViewer'
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token'))
@@ -46,6 +47,7 @@ export default function App() {
         <FleetManager token={token} user={user} />
         <LinkStop token={token} user={user} />
         <ScheduleMaker token={token} user={user} />
+        <ErrorLogViewer token={token} />
       </main>
     </div>
   )

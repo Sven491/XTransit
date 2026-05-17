@@ -9,7 +9,7 @@ export default function FleetManager({ token, user }) {
   const [licensePlate, setLicensePlate] = useState('')
   const [message, setMessage] = useState(null)
   const [canCreateBus, setCanCreateBus] = useState(true)
-  const [isAdmin] = useState(Boolean(user?.userCode))
+  const [isAdmin] = useState(Boolean(user?.isAdmin))
   const [editingBus, setEditingBus] = useState(null)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
 

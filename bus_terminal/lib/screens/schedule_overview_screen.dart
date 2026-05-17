@@ -226,8 +226,6 @@ class _ScheduleOverviewScreenState extends State<ScheduleOverviewScreen> with Ti
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Diensten'),
@@ -323,7 +321,7 @@ class _ProgressTab extends StatelessWidget {
                   return Card(
                     child: ListTile(
                       title: Text('Lijn ${svc.lineNumber} — ${svc.busName}'),
-                      subtitle: Text('${_formatTime(svc.startTime)}'),
+                      subtitle: Text(_formatTime(svc.startTime)),
                       trailing: TextButton(
                         onPressed: () async {
                           try {

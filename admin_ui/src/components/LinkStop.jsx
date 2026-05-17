@@ -13,7 +13,7 @@ export default function LinkStop({ token, user }) {
   const [draggedItem, setDraggedItem] = useState(null)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
 
-  const isAdmin = Boolean(user?.userCode)
+  const isAdmin = Boolean(user?.isAdmin)
 
   const nextOrder = useMemo(() => stops.length + 1, [stops])
 

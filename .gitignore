@@ -1,6 +1,7 @@
 .env
 /*.env
 transit_api/.env
+error_log_api/.env
 
 # Local build / node_modules
 admin_ui/node_modules/

@@ -9,6 +9,44 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+const ERROR_LOG_API_URL = process.env.ERROR_LOG_API_URL || 'http://localhost:5003/error_log';
+
+function friendlyErrorMessage(statusCode) {
+  if (statusCode === 400) return 'Controleer je invoer en probeer opnieuw.';
+  if (statusCode === 401) return 'Je sessie is verlopen. Log opnieuw in.';
+  if (statusCode === 403) return 'Je hebt hier geen toegang toe.';
+  if (statusCode === 404) return 'Niet gevonden.';
+  return 'Er ging iets mis. Probeer het later opnieuw.';
+}
+
+async function reportError({ partOfService, error }) {
+  try {
+    await fetch(ERROR_LOG_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        service: 'transit_api',
+        partOfService,
+        error,
+      }),
+    });
+  } catch (_) {}
+}
+
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    if (res.statusCode >= 400 && body && typeof body === 'object') {
+      const rawError = body.error || body.message || body.details || `HTTP ${res.statusCode}`;
+      void reportError({ partOfService: `${req.method} ${req.originalUrl}`, error: rawError });
+      return originalJson({ error: friendlyErrorMessage(res.statusCode) });
+    }
+    return originalJson(body);
+  };
+
+  next();
+});
+
 // Development mock storage when DEV_MOCK=1
 const DEV_MOCK = process.env.DEV_MOCK === '1';
 const _mock = {
@@ -90,18 +128,8 @@ if (DEV_MOCK) {
   _mock.nextScheduleId = 2;
 }
 
-const adminUserCodes = new Set(
-  (process.env.ADMIN_USER_CODES || '')
-    .split(',')
-    .map(code => code.trim())
-    .filter(Boolean)
-    .map(code => Number(code))
-    .filter(code => Number.isFinite(code))
-);
-
 const adminMiddleware = (req, res, next) => {
-  const userCode = Number(req.user?.userCode);
-  if (!Number.isFinite(userCode) || !adminUserCodes.has(userCode)) {
+  if (!req.user || !req.user.isAdmin) {
     return res.status(403).json({ error: 'forbidden' });
   }
 
